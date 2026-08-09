@@ -31,8 +31,11 @@ Implementation follows these principles from the design:
 
 - [ ] 2. Define adapter interfaces and fakes for external I/O
   - [ ] 2.1 Define port interfaces
-    - Define `SourceFetcher` (`fetch`, `isAllowed`), `ModelClient` (Model_A generation / Model_B critique calls), and a `Repository` persistence interface covering topics, drafts, research results, verification reports, and compliance results with their `Stage`
-    - Define `OutputPort` (`deliver(draft, platform, item)`)
+    - Define `SourceFetcher` with permission checks and `fetch(source, cursor, signal)` returning durable, paged `FetchPage` results.
+    - Define independently injectable Model A generation and Model B critique ports whose requests support cancellation/deadlines and whose responses retain provider, model, prompt, and configuration versions.
+    - Define persistence contracts for topics, research results, immutable draft revisions, verification reports, immutable platform artifacts, compliance results, approvals, pipeline runs, transitions, and deliveries. Keep mutable `WorkflowStage` and `WorkStatus` only on `PipelineRun`.
+    - Require workflow mutations to atomically persist linked records and guarded transitions using expected versions/stages plus idempotency keys; preserve immutable revision/artifact/hash links.
+    - Define `OutputPort.deliver(command: DeliveryCommand): Promise<DeliveryOutcome>` so delivery consumes an approved artifact and exact hash without re-rendering mutable content.
     - _Requirements: 1.1, 5.1, 8.6_
   - [ ]* 2.2 Build in-memory fakes for tests
     - Implement fake `SourceFetcher`, fake `ModelClient`, and in-memory `Repository` for use across property and integration tests
