@@ -1,3 +1,4 @@
+
 # Design Document: FB_AI
 
 ## Overview
@@ -38,6 +39,7 @@ The requirements use `Published` as the final pipeline stage and also require se
 - `Rejected` only for explicit Operator rejection or a declared non-recoverable failure.
 
 Thus Requirement 7's ordered content stages are preserved through `Approved`; its Phase 2 `Published` outcome is represented by a successful delivery record. Phase 1 uses `Exported`. Requirement 7.3 applies only to terminal failure, not to the recoverable cases explicitly defined by Requirements 2–6 and 9.
+
 ## Architecture
 
 ### Technology choices
@@ -131,25 +133,26 @@ A draft has one content workflow and zero or more independent delivery records. 
 
 ### Transition rules
 
-| From | Event/result | To/status |
-|---|---|---|
-| Collected | valid score at/above threshold | Scored / Ready |
-| Collected | missing scoring input | Collected / Unscored |
-| Scored | sufficient research | Researched / Ready |
-| Scored | insufficient/origin unavailable | Scored / InsufficientData |
-| Researched | all formats generated | Generated / Ready |
-| Generated | all source-backed claims pass | Verified / Ready |
-| Generated | contradictions remain | Generated / VerificationBlocked |
-| Verified | every selected artifact passes | ComplianceChecked / Ready |
-| Verified | any selected artifact fails | Verified / ComplianceFailed |
-| ComplianceChecked | review package persisted | PendingApproval / Ready |
-| PendingApproval | Operator edits | Generated / Ready, new revision |
-| PendingApproval | explicit valid approval | Approved / Ready |
-| PendingApproval | explicit rejection with note | Rejected / Rejected |
-| Any nonterminal | retryable dependency failure | same stage / RetryableBlocked |
-| Any nonterminal | declared non-recoverable failure | Rejected / Rejected |
+| From              | Event/result                     | To/status                       |
+| ----------------- | -------------------------------- | ------------------------------- |
+| Collected         | valid score at/above threshold   | Scored / Ready                  |
+| Collected         | missing scoring input            | Collected / Unscored            |
+| Scored            | sufficient research              | Researched / Ready              |
+| Scored            | insufficient/origin unavailable  | Scored / InsufficientData       |
+| Researched        | all formats generated            | Generated / Ready               |
+| Generated         | all source-backed claims pass    | Verified / Ready                |
+| Generated         | contradictions remain            | Generated / VerificationBlocked |
+| Verified          | every selected artifact passes   | ComplianceChecked / Ready       |
+| Verified          | any selected artifact fails      | Verified / ComplianceFailed     |
+| ComplianceChecked | review package persisted         | PendingApproval / Ready         |
+| PendingApproval   | Operator edits                   | Generated / Ready, new revision |
+| PendingApproval   | explicit valid approval          | Approved / Ready                |
+| PendingApproval   | explicit rejection with note     | Rejected / Rejected             |
+| Any nonterminal   | retryable dependency failure     | same stage / RetryableBlocked   |
+| Any nonterminal   | declared non-recoverable failure | Rejected / Rejected             |
 
 An automatic operation exceeding its 300-second stage deadline is classified by policy. It is retryable while attempts remain; only exhaustion of the configured stage retry budget becomes terminal rejection. This preserves Requirements 5.7 and 7.7 without losing recoverability.
+
 ### Immutable revisions and approval integrity
 
 Every generated or Operator-edited version is immutable.
@@ -301,6 +304,7 @@ extract claims for revision N
 ```
 
 `maxRounds` is 1–5, default 2. Every revision and report is retained. A model timeout retries at most three times according to the retry policy; exhaustion leaves the item `Generated / RetryableBlocked` and notifies the Operator. No model is permitted to advance state.
+
 ### Platform artifact renderer
 
 Compliance and approval operate on the exact bytes intended for output.
@@ -407,6 +411,7 @@ interface ReviewDashboardApi {
   listDeliveries(id: string): Promise<DeliveryRecord[]>;
 }
 ```
+
 ### Output port and delivery records
 
 ```typescript
@@ -622,6 +627,7 @@ Bounded loops are:
 - scheduled work and metrics: each occurrence is a distinct idempotent job, not an in-process infinite loop.
 
 `Deferred` work must have `nextAttemptAt`; `RetryableBlocked` work requires explicit retry policy or Operator action. Jobs exceeding their total budget go to a dead-letter queue and notify the Operator. They do not silently spin.
+
 ## Phase 2 Design
 
 ### API Publisher (Requirement 9)
@@ -657,16 +663,16 @@ Transport encryption is mandatory outside local development. Database backups, r
 
 ## Error Handling
 
-| Category | Examples | Result |
-|---|---|---|
-| Retryable dependency | network timeout, 429, selected 5xx | same stage + `RetryableBlocked`; schedule bounded retry |
-| Insufficient input | missing score field, too little research | `Unscored` or `InsufficientData`; Operator can fix/retry |
-| Verification failure | unsupported/contradictory claims after max rounds | `VerificationBlocked`; edit/retry required |
-| Compliance failure | rule, attribution, copyright, missing config | `ComplianceFailed` for affected artifact/target |
-| Validation/conflict | invalid command, stale version/hash | reject command; workflow unchanged |
-| Operator rejection | valid explicit rejection note | terminal `Rejected` |
-| Non-recoverable system failure | exhausted policy and declared terminal | terminal `Rejected`, preserve all data |
-| Delivery failure | publish/export adapter error | delivery `Deferred` or `Failed`; content stays `Approved` |
+| Category                       | Examples                                          | Result                                                         |
+| ------------------------------ | ------------------------------------------------- | -------------------------------------------------------------- |
+| Retryable dependency           | network timeout, 429, selected 5xx                | same stage +`RetryableBlocked`; schedule bounded retry       |
+| Insufficient input             | missing score field, too little research          | `Unscored` or `InsufficientData`; Operator can fix/retry   |
+| Verification failure           | unsupported/contradictory claims after max rounds | `VerificationBlocked`; edit/retry required                   |
+| Compliance failure             | rule, attribution, copyright, missing config      | `ComplianceFailed` for affected artifact/target              |
+| Validation/conflict            | invalid command, stale version/hash               | reject command; workflow unchanged                             |
+| Operator rejection             | valid explicit rejection note                     | terminal`Rejected`                                           |
+| Non-recoverable system failure | exhausted policy and declared terminal            | terminal`Rejected`, preserve all data                        |
+| Delivery failure               | publish/export adapter error                      | delivery`Deferred` or `Failed`; content stays `Approved` |
 
 No failure deletes prior content or evidence. Operator notifications are deduplicated by event key and link to actionable context.
 
