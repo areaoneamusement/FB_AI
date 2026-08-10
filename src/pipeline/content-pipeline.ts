@@ -17,6 +17,7 @@ import type {
   Repository,
   TransitionRecords,
 } from "../adapters/ports.js";
+import type { VerificationResult } from "./verification-engine.js";
 
 export const AUTOMATIC_WORKFLOW_STAGES = [
   "Scored",
@@ -77,6 +78,11 @@ export interface CompleteGenerationCommand extends MutationCommand {
 
 export interface CompleteVerificationCommand extends MutationCommand {
   readonly reportId: string;
+}
+
+/** Processor result consumed atomically by the workflow owner. */
+export interface RecordVerificationResultCommand extends MutationCommand {
+  readonly result: VerificationResult;
 }
 
 export interface CompleteComplianceCommand extends MutationCommand {
@@ -294,6 +300,49 @@ export class ContentPipeline {
       revision.id,
     );
   }
+  async recordVerificationResult(
+    command: RecordVerificationResultCommand,
+  ): Promise<PipelineRun> {
+    if (command.expectedStage !== "Generated") {
+      throw new PipelineCommandError(
+        "INVALID_TRANSITION",
+        "Verification results can only be recorded from Generated",
+      );
+    }
+    assertNonEmpty(command.idempotencyKey, "idempotencyKey");
+    const run = await this.requiredRun(command.pipelineRunId);
+    const result = command.result;
+    await this.assertVerificationResultEvidence(run, result);
+    const records: TransitionRecords = {
+      draftRevisions: result.artifacts.revisions,
+      verificationReports: result.artifacts.reports,
+    };
+    if (result.kind === "Passed") {
+      return this.commit(command, {
+        nextStage: "Verified",
+        nextStatus: "Ready",
+        nextActiveDraftRevisionId: result.activeRevision.id,
+        actorType: "System",
+        artifactRevisionId: result.activeRevision.id,
+        records,
+      });
+    }
+    const retryable = result.kind === "RetryableBlocked";
+    const reason = retryable
+      ? `${result.error.dependency} verification failed after ${result.error.attempts} attempt(s): ${result.error.reason}`
+      : "Verification retained contradictory or unsupported claims after the configured rounds";
+    return this.commit(command, {
+      nextStage: "Generated",
+      nextStatus: retryable ? "RetryableBlocked" : "VerificationBlocked",
+      nextActiveDraftRevisionId: result.activeRevision.id,
+      blockedReason: reason,
+      actorType: "System",
+      reason,
+      artifactRevisionId: result.activeRevision.id,
+      records,
+    });
+  }
+
   async completeVerification(command: CompleteVerificationCommand): Promise<PipelineRun> {
     assertIntentStage(command, "Generated", "Verified");
     const report = await this.requiredVerification(command.reportId);
@@ -364,10 +413,12 @@ export class ContentPipeline {
       );
     }
     const reason = command.reason.trim();
-    if (reason.length < 1 || reason.length > 500) {
+    const reasonLength = Array.from(reason).length;
+    const maximumReasonLength = command.actorType === "Operator" ? 1_000 : 500;
+    if (reasonLength < 1 || reasonLength > maximumReasonLength) {
       throw new PipelineCommandError(
         "INVALID_REJECTION",
-        "Rejection reason must contain 1 to 500 characters",
+        `Rejection reason must contain 1 to ${maximumReasonLength} characters`,
       );
     }
     if (command.actorType === "Operator") {
@@ -520,6 +571,82 @@ export class ContentPipeline {
       artifactRevisionId: run.activeDraftRevisionId,
       records: {},
     });
+  }
+
+  private async assertVerificationResultEvidence(
+    run: PipelineRun,
+    result: VerificationResult,
+  ): Promise<void> {
+    const initialRevisionId = run.activeDraftRevisionId;
+    if (initialRevisionId === undefined) {
+      throw new PipelineCommandError(
+        "EVIDENCE_MISMATCH",
+        "Generated workflow has no active draft revision",
+      );
+    }
+    const initialRevision = await this.requiredRevision(initialRevisionId);
+    const revisions = [initialRevision, ...result.artifacts.revisions];
+    const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
+    let previous = initialRevision;
+    for (const revision of result.artifacts.revisions) {
+      if (
+        revisionById.size !== revisions.length ||
+        revision.draftId !== previous.draftId ||
+        revision.parentRevisionId !== previous.id ||
+        revision.revision !== previous.revision + 1
+      ) {
+        throw new PipelineCommandError(
+          "EVIDENCE_MISMATCH",
+          "Verification correction revisions must form one immutable monotonic chain",
+        );
+      }
+      previous = revision;
+    }
+    if (
+      result.activeRevision.id !== previous.id ||
+      result.activeRevision.contentHash !== previous.contentHash
+    ) {
+      throw new PipelineCommandError(
+        "EVIDENCE_MISMATCH",
+        "Verification result is not bound to its exact active revision",
+      );
+    }
+    const reportIds = new Set<string>();
+    for (const report of result.artifacts.reports) {
+      const revision = revisionById.get(report.draftRevisionId);
+      if (
+        revision === undefined ||
+        report.contentHash !== revision.contentHash ||
+        reportIds.has(report.id) ||
+        report.passed !== report.findings.every(({ verdict }) => verdict === "Pass")
+      ) {
+        throw new PipelineCommandError(
+          "EVIDENCE_MISMATCH",
+          "Verification reports must be unique and exact-revision/hash bound",
+        );
+      }
+      reportIds.add(report.id);
+    }
+    if (result.kind !== "RetryableBlocked") {
+      const claimIds = new Set(result.claims.map(({ id }) => id));
+      const findingIds = result.report.findings.map(({ claimId }) => claimId);
+      if (
+        !reportIds.has(result.report.id) ||
+        result.report.draftRevisionId !== result.activeRevision.id ||
+        result.report.contentHash !== result.activeRevision.contentHash ||
+        result.report.passed !== (result.kind === "Passed") ||
+        claimIds.size !== result.claims.length ||
+        findingIds.length !== result.claims.length ||
+        new Set(findingIds).size !== findingIds.length ||
+        findingIds.some((id) => !claimIds.has(id)) ||
+        result.claims.some(({ draftRevisionId }) => draftRevisionId !== result.activeRevision.id)
+      ) {
+        throw new PipelineCommandError(
+          "EVIDENCE_MISMATCH",
+          "Terminal verification result does not cover the exact active revision claims",
+        );
+      }
+    }
   }
 
   private assertApprovalEvidence(
