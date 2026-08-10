@@ -1,0 +1,27 @@
+{
+  "name": "fb-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:vitest && npm run test:node",
+    "test:vitest": "vitest run",
+    "test:node": "node --import tsx --test test/topic-scorer.test.ts test/compliance-checker.test.ts",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.15.30",
+    "fast-check": "4.3.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.10.0"
+  }
+}
