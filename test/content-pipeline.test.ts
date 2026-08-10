@@ -53,12 +53,28 @@ class MemoryRepository implements Repository {
   async getComplianceResult(id: string) { return this.compliance.get(id); }
   async getApproval(id: string) { return this.approvals.get(id); }
   async getPipelineRun(id: string) { return this.runs.get(id); }
+  async listPipelineRuns() { return [...this.runs.values()]; }
+  async listVerificationReportsByDraftRevision(draftRevisionId: string) {
+    return [...this.reports.values()].filter((value) => value.draftRevisionId === draftRevisionId);
+  }
+  async listPlatformArtifactsByDraftRevision(draftRevisionId: string) {
+    return [...this.artifacts.values()].filter((value) => value.draftRevisionId === draftRevisionId);
+  }
+  async listComplianceResultsByDraftRevision(draftRevisionId: string) {
+    return [...this.compliance.values()].filter((value) => value.draftRevisionId === draftRevisionId);
+  }
+  async listApprovalsByPipelineRun(pipelineRunId: string) {
+    return [...this.approvals.values()].filter((value) => value.pipelineRunId === pipelineRunId);
+  }
   async listTransitions(pipelineRunId: string) {
     return this.transitions.filter((value) => value.pipelineRunId === pipelineRunId);
   }
   async getDelivery(id: string) { return this.deliveries.get(id); }
   async getDeliveryByIdempotencyKey(key: string) {
     return [...this.deliveries.values()].find((value) => value.idempotencyKey === key);
+  }
+  async listDeliveriesByApproval(approvalId: string) {
+    return [...this.deliveries.values()].filter((value) => value.approvalId === approvalId);
   }
 
   async commitGuardedTransition(
@@ -80,6 +96,21 @@ class MemoryRepository implements Repository {
       current.workStatus !== command.expectedStatus
     ) {
       return { kind: "Conflict", current };
+    }
+    for (const research of command.records.researchResults ?? []) {
+      this.research.set(research.id, research);
+    }
+    for (const revision of command.records.draftRevisions ?? []) {
+      this.revisions.set(revision.id, revision);
+    }
+    for (const report of command.records.verificationReports ?? []) {
+      this.reports.set(report.id, report);
+    }
+    for (const artifact of command.records.platformArtifacts ?? []) {
+      this.artifacts.set(artifact.id, artifact);
+    }
+    for (const result of command.records.complianceResults ?? []) {
+      this.compliance.set(result.id, result);
     }
     for (const approval of command.records.approvals ?? []) {
       this.approvals.set(approval.id, approval);
@@ -335,6 +366,71 @@ describe("ContentPipeline", () => {
       reason: "Generated content failed terminal validation",
     });
   });
+  it("measures the rejection reason limit in code points for both actor types", async () => {
+    // "🙂" is one code point but two UTF-16 code units.
+    const astral = (codePoints: number) => "🙂".repeat(codePoints);
+
+    const accepted = async (
+      actorType: "Operator" | "System",
+      codePointCount: number,
+    ) => {
+      const repository = new MemoryRepository();
+      repository.runs.set("run-1", run("Generated"));
+      repository.revisions.set("revision-1", revision());
+      const contentPipeline = pipeline(repository);
+      const reason = astral(codePointCount);
+
+      const rejected = await contentPipeline.reject({
+        pipelineRunId: "run-1",
+        expectedVersion: 1,
+        expectedStage: "Generated",
+        expectedStatus: "Ready",
+        failingStage: "Generated",
+        reason,
+        actorType,
+        ...(actorType === "Operator" ? { actorId: "operator-1" } : {}),
+        idempotencyKey: "reject-boundary",
+      });
+
+      expect(rejected).toMatchObject({
+        stage: "Rejected",
+        workStatus: "Rejected",
+        blockedReason: `[Generated] ${reason}`,
+      });
+      expect(repository.transitions[0]).toMatchObject({ reason });
+    };
+
+    const refused = async (
+      actorType: "Operator" | "System",
+      codePointCount: number,
+    ) => {
+      const repository = new MemoryRepository();
+      repository.runs.set("run-1", run("Generated"));
+      repository.revisions.set("revision-1", revision());
+      const contentPipeline = pipeline(repository);
+
+      await expect(
+        contentPipeline.reject({
+          pipelineRunId: "run-1",
+          expectedVersion: 1,
+          expectedStage: "Generated",
+          expectedStatus: "Ready",
+          failingStage: "Generated",
+          reason: astral(codePointCount),
+          actorType,
+          ...(actorType === "Operator" ? { actorId: "operator-1" } : {}),
+          idempotencyKey: "reject-over",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_REJECTION" });
+      expect(repository.transitions).toHaveLength(0);
+    };
+
+    await accepted("Operator", 1_000);
+    await refused("Operator", 1_001);
+    await accepted("System", 500);
+    await refused("System", 501);
+  });
+
   it("approves only exact passing evidence and delivers only an approved exact artifact", async () => {
     const repository = new MemoryRepository();
     repository.runs.set("run-1", run("PendingApproval"));
@@ -482,5 +578,62 @@ describe("ContentPipeline", () => {
     });
     expect(rejected.blockedReason).toContain("[Generated]");
     expect(rejected.blockedReason).toContain("retry budget exhausted");
+  });
+
+  it("atomically persists exact verification evidence and owns the Generated to Verified transition", async () => {
+    const repository = new MemoryRepository();
+    repository.runs.set("run-1", run("Generated"));
+    repository.revisions.set("revision-1", revision());
+    const contentPipeline = pipeline(repository);
+    const claim = {
+      id: "claim-1",
+      draftRevisionId: "revision-1",
+      format: "FacebookPost" as const,
+      path: "facebookPost",
+      startOffset: 0,
+      endOffset: 50,
+      text: "A".repeat(50),
+    };
+    const exactReport: VerificationReport = {
+      ...report(),
+      findings: [{
+        claimId: claim.id,
+        verdict: "Pass",
+        evidenceRefs: [topic().sourceRef],
+      }],
+    };
+
+    const verified = await contentPipeline.recordVerificationResult({
+      pipelineRunId: "run-1",
+      expectedVersion: 1,
+      expectedStage: "Generated",
+      expectedStatus: "Ready",
+      idempotencyKey: "verify-result-1",
+      result: {
+        kind: "Passed",
+        eligibleStage: "Verified",
+        activeRevision: revision(),
+        claims: [claim],
+        report: exactReport,
+        attempts: 1,
+        artifacts: {
+          revisions: [],
+          reports: [exactReport],
+          corrections: [],
+        },
+      },
+    });
+
+    expect(verified).toMatchObject({
+      stage: "Verified",
+      workStatus: "Ready",
+      activeDraftRevisionId: "revision-1",
+    });
+    expect(await repository.getVerificationReport(exactReport.id)).toEqual(exactReport);
+    expect(repository.transitions[0]).toMatchObject({
+      fromStage: "Generated",
+      toStage: "Verified",
+      artifactRevisionId: "revision-1",
+    });
   });
 });

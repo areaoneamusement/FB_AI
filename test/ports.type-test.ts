@@ -106,6 +106,21 @@ const repository: Repository = {
   async getPipelineRun(_id): Promise<PipelineRun | undefined> {
     return undefined;
   },
+  async listPipelineRuns(): Promise<readonly PipelineRun[]> {
+    return [];
+  },
+  async listVerificationReportsByDraftRevision(): Promise<readonly VerificationReport[]> {
+    return [];
+  },
+  async listPlatformArtifactsByDraftRevision(): Promise<readonly PlatformArtifact[]> {
+    return [];
+  },
+  async listComplianceResultsByDraftRevision(): Promise<readonly ComplianceResult[]> {
+    return [];
+  },
+  async listApprovalsByPipelineRun(): Promise<readonly ApprovalRecord[]> {
+    return [];
+  },
   async listTransitions(_pipelineRunId): Promise<readonly PipelineTransition[]> {
     return [];
   },
@@ -114,6 +129,9 @@ const repository: Repository = {
   },
   async getDeliveryByIdempotencyKey(_key): Promise<DeliveryRecord | undefined> {
     return undefined;
+  },
+  async listDeliveriesByApproval(): Promise<readonly DeliveryRecord[]> {
+    return [];
   },
   async commitGuardedTransition(command) {
     return {

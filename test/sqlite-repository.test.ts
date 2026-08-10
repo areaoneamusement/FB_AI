@@ -244,6 +244,12 @@ describe("SqliteRepository", () => {
       expect(await repository.getVerificationReport(report.id)).toEqual(report);
       expect(await repository.getPlatformArtifact(artifact.id)).toEqual(artifact);
       expect(await repository.getComplianceResult(compliance.id)).toEqual(compliance);
+      expect(await repository.listPipelineRuns()).toEqual([
+        expect.objectContaining({ id: "run-1", stage: "PendingApproval" }),
+      ]);
+      expect(await repository.listVerificationReportsByDraftRevision(revision.id)).toEqual([report]);
+      expect(await repository.listPlatformArtifactsByDraftRevision(revision.id)).toEqual([artifact]);
+      expect(await repository.listComplianceResultsByDraftRevision(revision.id)).toEqual([compliance]);
 
       const approved = await repository.commitGuardedTransition(approvalTransition());
       expect(approved).toMatchObject({
@@ -251,8 +257,10 @@ describe("SqliteRepository", () => {
         run: { stage: "Approved", version: 2 },
       });
       expect(await repository.getApproval(approval.id)).toEqual(approval);
+      expect(await repository.listApprovalsByPipelineRun("run-1")).toEqual([approval]);
       expect(await repository.getDelivery(delivery.id)).toEqual(delivery);
       expect(await repository.getDeliveryByIdempotencyKey(delivery.idempotencyKey)).toEqual(delivery);
+      expect(await repository.listDeliveriesByApproval(approval.id)).toEqual([delivery]);
       await expect(
         repository.recordDelivery({
           ...delivery,
