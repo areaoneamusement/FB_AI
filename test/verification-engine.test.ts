@@ -72,6 +72,7 @@ const research: ResearchResult = {
   topicId: content.topicId,
   status: "Ok",
   unreachableSources: [],
+  skippedSources: [],
   items: [{
     id: "research-item-1",
     content: "Nguồn xác nhận các phát biểu trong bản nháp.",

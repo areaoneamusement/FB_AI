@@ -52,6 +52,7 @@ const research: ResearchResult = {
   }],
   status: "Ok",
   unreachableSources: [],
+  skippedSources: [],
 };
 
 const validContent: ContentDraft = {

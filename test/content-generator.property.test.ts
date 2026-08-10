@@ -65,6 +65,7 @@ const RESEARCH: ResearchResult = {
   ],
   status: "Ok",
   unreachableSources: [],
+  skippedSources: [],
 };
 
 const TOPIC_SNAPSHOT = structuredClone(TOPIC);

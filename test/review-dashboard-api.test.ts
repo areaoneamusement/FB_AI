@@ -42,6 +42,7 @@ const research: ResearchResult = {
   items: [],
   status: "Ok",
   unreachableSources: [],
+  skippedSources: [],
 };
 
 const content = {

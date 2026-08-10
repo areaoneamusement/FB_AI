@@ -75,6 +75,7 @@ const research: ResearchResult = {
   items: [],
   status: "Ok",
   unreachableSources: [],
+  skippedSources: [],
 };
 
 const BASE_CONTENT: ContentDraft = {

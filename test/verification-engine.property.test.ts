@@ -206,6 +206,7 @@ function researchOf(kinds: readonly ResearchKind[]): ResearchResult {
     items,
     status: "Ok",
     unreachableSources: [],
+    skippedSources: [],
   };
 }
 
