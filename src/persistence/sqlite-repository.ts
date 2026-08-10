@@ -139,6 +139,48 @@ export class SqliteRepository implements Repository {
     return this.getPayload<PipelineRun>("pipeline_runs", id);
   }
 
+  async listPipelineRuns(): Promise<readonly PipelineRun[]> {
+    return this.listPayloads<PipelineRun>(
+      "SELECT payload FROM pipeline_runs ORDER BY rowid",
+    );
+  }
+
+  async listVerificationReportsByDraftRevision(
+    draftRevisionId: string,
+  ): Promise<readonly VerificationReport[]> {
+    return this.listPayloads<VerificationReport>(
+      "SELECT payload FROM verification_reports WHERE draft_revision_id = ? ORDER BY rowid",
+      draftRevisionId,
+    );
+  }
+
+  async listPlatformArtifactsByDraftRevision(
+    draftRevisionId: string,
+  ): Promise<readonly PlatformArtifact[]> {
+    return this.listPayloads<PlatformArtifact>(
+      "SELECT payload FROM platform_artifacts WHERE draft_revision_id = ? ORDER BY rowid",
+      draftRevisionId,
+    );
+  }
+
+  async listComplianceResultsByDraftRevision(
+    draftRevisionId: string,
+  ): Promise<readonly ComplianceResult[]> {
+    return this.listPayloads<ComplianceResult>(
+      "SELECT payload FROM compliance_results WHERE draft_revision_id = ? ORDER BY rowid",
+      draftRevisionId,
+    );
+  }
+
+  async listApprovalsByPipelineRun(
+    pipelineRunId: string,
+  ): Promise<readonly ApprovalRecord[]> {
+    return this.listPayloads<ApprovalRecord>(
+      "SELECT payload FROM approvals WHERE pipeline_run_id = ? ORDER BY rowid",
+      pipelineRunId,
+    );
+  }
+
   async listTransitions(
     pipelineRunId: string,
   ): Promise<readonly PipelineTransition[]> {
@@ -159,6 +201,15 @@ export class SqliteRepository implements Repository {
       .prepare("SELECT payload FROM deliveries WHERE idempotency_key = ?")
       .get(key) as PayloadRow | undefined;
     return row === undefined ? undefined : decode<DeliveryRecord>(row.payload);
+  }
+
+  async listDeliveriesByApproval(
+    approvalId: string,
+  ): Promise<readonly DeliveryRecord[]> {
+    return this.listPayloads<DeliveryRecord>(
+      "SELECT payload FROM deliveries WHERE approval_id = ? ORDER BY rowid",
+      approvalId,
+    );
   }
 
   async commitGuardedTransition(
@@ -243,6 +294,14 @@ export class SqliteRepository implements Repository {
         "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
       ).run(MIGRATION_ID, this.now());
     })();
+  }
+
+  private listPayloads<T>(
+    sql: string,
+    ...parameters: readonly unknown[]
+  ): readonly T[] {
+    const rows = this.database.prepare(sql).all(...parameters) as PayloadRow[];
+    return rows.map((row) => decode<T>(row.payload));
   }
 
   private getPayload<T>(table: string, id: string): T | undefined {

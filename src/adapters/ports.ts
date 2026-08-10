@@ -156,9 +156,25 @@ export interface Repository {
   getComplianceResult(id: string): Promise<ComplianceResult | undefined>;
   getApproval(id: string): Promise<ApprovalRecord | undefined>;
   getPipelineRun(id: string): Promise<PipelineRun | undefined>;
+  listPipelineRuns(): Promise<readonly PipelineRun[]>;
+  listVerificationReportsByDraftRevision(
+    draftRevisionId: string,
+  ): Promise<readonly VerificationReport[]>;
+  listPlatformArtifactsByDraftRevision(
+    draftRevisionId: string,
+  ): Promise<readonly PlatformArtifact[]>;
+  listComplianceResultsByDraftRevision(
+    draftRevisionId: string,
+  ): Promise<readonly ComplianceResult[]>;
+  listApprovalsByPipelineRun(
+    pipelineRunId: string,
+  ): Promise<readonly ApprovalRecord[]>;
   listTransitions(pipelineRunId: string): Promise<readonly PipelineTransition[]>;
   getDelivery(id: string): Promise<DeliveryRecord | undefined>;
   getDeliveryByIdempotencyKey(key: string): Promise<DeliveryRecord | undefined>;
+  listDeliveriesByApproval(
+    approvalId: string,
+  ): Promise<readonly DeliveryRecord[]>;
 
   /** Atomically checks expected state/version, appends records/transition, and updates the run. */
   commitGuardedTransition(

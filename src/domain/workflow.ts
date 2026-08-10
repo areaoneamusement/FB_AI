@@ -116,7 +116,8 @@ export interface ReviewSummary {
 export interface ReviewPackage {
   readonly run: PipelineRun;
   readonly revision: DraftRevision;
-  readonly verification: VerificationReport;
+  /** Absent after an edit until the active revision is verified again. */
+  readonly verification?: VerificationReport;
   readonly artifacts: readonly PlatformArtifact[];
   readonly compliance: readonly ComplianceResult[];
 }
@@ -149,6 +150,22 @@ export interface DeliveryOutcome {
   readonly errorMessage?: string;
 }
 
+/** Immutable, copy-ready packaging of one exact approved platform artifact. */
+export interface ExportBundle {
+  readonly id: string;
+  readonly platform: TargetPlatform;
+  readonly targetId: string;
+  readonly approvalId: string;
+  readonly artifactId: string;
+  readonly artifactHash: string;
+  readonly rendererVersion: string;
+  readonly body: string;
+  readonly metadata: Readonly<Record<string, string>>;
+  readonly attribution: string;
+  readonly imageSuggestions: PlatformArtifact["imageSuggestions"];
+  readonly createdAt: string;
+}
+
 export interface DeliveryRecord {
   readonly id: string;
   readonly kind: DeliveryKind;
@@ -163,6 +180,8 @@ export interface DeliveryRecord {
   readonly nextAttemptAt?: string;
   readonly externalId?: string;
   readonly externalUrl?: string;
+  /** Phase 1 export payload; persisted with the idempotent delivery record. */
+  readonly exportBundle?: ExportBundle;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
