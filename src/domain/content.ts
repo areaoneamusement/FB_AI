@@ -89,6 +89,10 @@ export interface DraftRevision {
   readonly createdAt: string;
 }
 
+export interface DraftPatch {
+  readonly content: ContentDraft;
+}
+
 export interface Claim {
   readonly id: string;
   readonly draftRevisionId: string;
