@@ -133,8 +133,23 @@ describe("ResearchAggregator", () => {
       },
     ]);
     expect(result.unreachableSources).toEqual([]);
+    // A permission refusal is recorded, not conflated with a failure (CR-0002).
+    expect(result.skippedSources).toEqual([
+      {
+        sourceRef: {
+          sourceId: blocked.id,
+          captureId: "skipped:blocked",
+          url: blocked.url,
+          capturedAt: NOW.toISOString(),
+          termsVersion: "terms-v2",
+        },
+        reason: "robots.txt",
+        termsVersion: "terms-v2",
+      },
+    ]);
     expect(result).not.toHaveProperty("stage");
     expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.skippedSources)).toBe(true);
   });
 
   it("uses the default minimum of three and returns explained insufficient data", async () => {
@@ -198,6 +213,8 @@ describe("ResearchAggregator", () => {
     ]);
     expect(result.unreachableSources[0]?.termsVersion).toBe("terms-v2");
     expect(result.unreachableSources[1]?.captureId).toBe("unreachable:slow");
+    // Failures and timeouts are never recorded as permission refusals.
+    expect(result.skippedSources).toEqual([]);
   });
 
   it("marks the result insufficient and does not fetch related sources when origin is unreachable", async () => {

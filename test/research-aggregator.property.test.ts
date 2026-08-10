@@ -18,6 +18,8 @@ import {
 const NOW = new Date("2025-04-01T12:00:00.000Z");
 const ORIGIN_ID = "origin";
 const TERMS_VERSION = "terms-v2";
+/** Reason the fake fetcher gives when it refuses a source. */
+const DISALLOWED_REASON = "robots.txt cấm truy cập";
 const RESEARCH_KINDS: readonly ResearchItem["kind"][] = [
   "Quoted",
   "Summarized",
@@ -31,6 +33,7 @@ const RESULT_KEYS = new Set([
   "status",
   "reason",
   "unreachableSources",
+  "skippedSources",
 ]);
 const WORKFLOW_KEYS = ["stage", "workStatus", "version", "blockedReason"];
 
@@ -89,7 +92,11 @@ function aggregator(fetcher: SourceFetcher): ResearchAggregator {
 // ---------------------------------------------------------------------------
 
 type RelatedBehavior = "ok" | "fail" | "disallowed" | "inactive";
-type OriginMode = "reachable" | "failing" | "inactive" | "absent";
+/**
+ * `disallowed` is the origin refused on permission grounds: reachable, but the
+ * terms or robots.txt prohibit research access (CR-0002 criterion 7).
+ */
+type OriginMode = "reachable" | "failing" | "inactive" | "absent" | "disallowed";
 
 interface Scenario {
   readonly configuredMinItems: number | undefined;
@@ -129,6 +136,7 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
     "failing",
     "inactive",
     "absent",
+    "disallowed",
   ),
   itemOffset: fc.constantFrom(-1, 0, 1, 3),
   related: fc.array(
@@ -141,6 +149,45 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
   sourceType: fc.constantFrom<SourceType>("GitHub", "Website", "Forum"),
 });
 
+/**
+ * Pinned scenarios for Property 12's coverage guard. The guard demands that
+ * every origin mode, every item-count boundary and every related-source
+ * behavior actually occurred; leaving that to random draws makes it
+ * seed-dependent. Each required label below is produced by an explicit example,
+ * so the guard holds on every seed regardless of `numRuns`.
+ */
+function pinnedScenario(overrides: Partial<Scenario> = {}): [Scenario] {
+  return [
+    {
+      configuredMinItems: 3,
+      originMode: "reachable",
+      itemOffset: 0,
+      related: [],
+      text: "plain ascii research body",
+      emptyBody: false,
+      pagedOrigin: false,
+      sourceType: "Website",
+      ...overrides,
+    },
+  ];
+}
+
+const INSUFFICIENT_DATA_EXAMPLES: readonly [Scenario][] = [
+  // origin:reachable, offset:0 and all four related behaviors in one run.
+  pinnedScenario({
+    related: ["ok", "fail", "disallowed", "inactive"],
+  }),
+  // offset:-1 (one item short of minItems) and offset:1 (one over).
+  pinnedScenario({ itemOffset: -1 }),
+  pinnedScenario({ itemOffset: 1 }),
+  // The four non-usable origin modes, including the permission refusal that
+  // must be recorded as skipped rather than unreachable (CR-0002 criterion 7).
+  pinnedScenario({ originMode: "failing" }),
+  pinnedScenario({ originMode: "inactive" }),
+  pinnedScenario({ originMode: "absent" }),
+  pinnedScenario({ originMode: "disallowed" }),
+];
+
 interface Plan {
   readonly minItems: number;
   readonly sources: readonly SourceConfig[];
@@ -150,6 +197,12 @@ interface Plan {
   /** sourceId -> number of items the source will return. */
   readonly itemCounts: ReadonlyMap<string, number>;
   readonly failingRelatedIds: readonly string[];
+  /** Related sources refused on permission grounds (CR-0002). */
+  readonly disallowedRelatedIds: readonly string[];
+  /** True when the origin itself was refused on permission grounds (CR-0002). */
+  readonly originDisallowed: boolean;
+  /** Source ids expected in `skippedSources`, the origin included when refused. */
+  readonly expectedSkippedIds: readonly string[];
   readonly contributingIds: readonly string[];
   readonly expectedItemCount: number;
   readonly fetcher: SourceFetcher;
@@ -168,6 +221,11 @@ function planFor(scenario: Scenario): Plan {
   const behaviorById = new Map<string, RelatedBehavior>(
     scenario.related.map((behavior, index) => [`related-${index}`, behavior]),
   );
+  // The origin passes through the same permission gate as a related source, so
+  // registering it here makes `isAllowed` below refuse it (CR-0002 criterion 7).
+  if (scenario.originMode === "disallowed") {
+    behaviorById.set(ORIGIN_ID, "disallowed");
+  }
 
   const okRelatedIds = relatedSources
     .map(({ id }) => id)
@@ -193,6 +251,11 @@ function planFor(scenario: Scenario): Plan {
         .map(({ id }) => id)
         .filter((id) => behaviorById.get(id) === "fail")
     : [];
+  const disallowedRelatedIds = originUsable
+    ? relatedSources
+        .map(({ id }) => id)
+        .filter((id) => behaviorById.get(id) === "disallowed")
+    : [];
 
   const fetcher: SourceFetcher = {
     async isAllowed(config) {
@@ -200,7 +263,7 @@ function planFor(scenario: Scenario): Plan {
         ? {
             ...permitted,
             allowed: false,
-            reason: "robots.txt cấm truy cập",
+            reason: DISALLOWED_REASON,
           }
         : permitted;
     },
@@ -223,6 +286,8 @@ function planFor(scenario: Scenario): Plan {
     ? contributors.reduce((sum, id) => sum + (itemCounts.get(id) ?? 0), 0)
     : 0;
 
+  const originDisallowed = scenario.originMode === "disallowed";
+
   return {
     minItems,
     sources: origin === undefined ? relatedSources : [origin, ...relatedSources],
@@ -231,6 +296,11 @@ function planFor(scenario: Scenario): Plan {
     originUsable,
     itemCounts,
     failingRelatedIds,
+    disallowedRelatedIds,
+    originDisallowed,
+    // A refused origin aborts before related sources are fetched, so it is the
+    // only skipped entry in that case.
+    expectedSkippedIds: originDisallowed ? [ORIGIN_ID] : disallowedRelatedIds,
     contributingIds: originUsable ? contributors : [],
     expectedItemCount,
     fetcher,
@@ -300,6 +370,7 @@ function expectArtifactOnly(
   expect(Object.isFrozen(result)).toBe(true);
   expect(Object.isFrozen(result.items)).toBe(true);
   expect(Object.isFrozen(result.unreachableSources)).toBe(true);
+  expect(Object.isFrozen(result.skippedSources)).toBe(true);
   expect(after.topic).toEqual(before.topic);
   expect(after.sources).toEqual(before.sources);
 }
@@ -358,6 +429,34 @@ describe("ResearchAggregator properties", () => {
               expect(provenance?.promptVersion.length ?? 0).toBeGreaterThan(0);
             }
           }
+
+          // A permission refusal carries its own provenance (CR-0002): the
+          // refused source, why it was refused, and the terms version in force.
+          for (const skipped of result.skippedSources) {
+            expect(skipped.reason.trim().length).toBeGreaterThan(0);
+            expect(configuredIds.has(skipped.sourceRef.sourceId)).toBe(true);
+            expect(skipped.sourceRef.captureId.length).toBeGreaterThan(0);
+            expect(skipped.sourceRef.url.length).toBeGreaterThan(0);
+            expect(skipped.termsVersion).toBe(TERMS_VERSION);
+            expect(skipped.sourceRef.termsVersion).toBe(TERMS_VERSION);
+            expect(
+              Number.isFinite(Date.parse(skipped.sourceRef.capturedAt)),
+            ).toBe(true);
+          }
+
+          // A refused origin carries the same provenance, and it is the only
+          // skipped entry because aggregation stops there (CR-0002 criterion 7).
+          if (plan.originDisallowed) {
+            expect(result.status).toBe("InsufficientData");
+            expect(result.items).toEqual([]);
+            expect(result.skippedSources).toHaveLength(1);
+            const [skipped] = result.skippedSources;
+            expect(skipped?.sourceRef.sourceId).toBe(
+              plan.topic.sourceRef.sourceId,
+            );
+            expect(skipped?.reason).toBe(DISALLOWED_REASON);
+            expect(skipped?.termsVersion).toBe(TERMS_VERSION);
+          }
         }),
         { numRuns: 100 },
       );
@@ -393,9 +492,26 @@ describe("ResearchAggregator properties", () => {
             if (originUnavailable) {
               expect(result.reason).toContain(plan.topic.sourceRef.sourceId);
               expect(result.items).toEqual([]);
-              expect(
-                result.unreachableSources.map(({ sourceId }) => sourceId),
-              ).toEqual([plan.topic.sourceRef.sourceId]);
+              if (plan.originDisallowed) {
+                // CR-0002 criterion 7: an origin refused on permission grounds
+                // still yields InsufficientData, and it is recorded in
+                // skippedSources — never in unreachableSources, which holds
+                // only failures and timeouts.
+                expect(result.unreachableSources).toEqual([]);
+                expect(result.skippedSources).toHaveLength(1);
+                const [skipped] = result.skippedSources;
+                expect(skipped?.sourceRef.sourceId).toBe(
+                  plan.topic.sourceRef.sourceId,
+                );
+                expect(skipped?.reason).toBe(DISALLOWED_REASON);
+                expect(skipped?.termsVersion).toBe(TERMS_VERSION);
+                expect(skipped?.sourceRef.termsVersion).toBe(TERMS_VERSION);
+              } else {
+                expect(
+                  result.unreachableSources.map(({ sourceId }) => sourceId),
+                ).toEqual([plan.topic.sourceRef.sourceId]);
+                expect(result.skippedSources).toEqual([]);
+              }
             } else {
               expect(result.reason).toContain(String(plan.minItems));
             }
@@ -405,7 +521,7 @@ describe("ResearchAggregator properties", () => {
           }
           expect(result.topicId).toBe(plan.topic.id);
         }),
-        { numRuns: 100 },
+        { numRuns: 100, examples: [...INSUFFICIENT_DATA_EXAMPLES] },
       );
 
       // The mandated edge cases really were generated.
@@ -414,6 +530,7 @@ describe("ResearchAggregator properties", () => {
         "origin:failing",
         "origin:inactive",
         "origin:absent",
+        "origin:disallowed",
         "offset:-1",
         "offset:0",
         "offset:1",
@@ -435,7 +552,12 @@ describe("ResearchAggregator properties", () => {
       // **Validates: Requirements 3.5**
       await fc.assert(
         fc.asyncProperty(
-          scenarioArb.filter(({ originMode }) => originMode === "reachable"),
+          // A refused origin is included so the disjointness claim below also
+          // covers the origin itself (CR-0002 criterion 7).
+          scenarioArb.filter(
+            ({ originMode }) =>
+              originMode === "reachable" || originMode === "disallowed",
+          ),
           async (scenario) => {
             const plan = planFor(scenario);
             const result = await run(plan, scenario);
@@ -446,6 +568,44 @@ describe("ResearchAggregator properties", () => {
             for (const ref of result.unreachableSources) {
               expect(ref.captureId).toBe(`unreachable:${ref.sourceId}`);
               expect(ref.termsVersion).toBe(TERMS_VERSION);
+            }
+
+            // CR-0002: a related source refused on permission grounds is
+            // recorded in skippedSources with its reason, no longer skipped
+            // silently, and the two collections stay strictly disjoint —
+            // "not allowed to read" is never conflated with "failed".
+            const skippedIds = result.skippedSources.map(
+              ({ sourceRef }) => sourceRef.sourceId,
+            );
+            expect([...skippedIds].sort()).toEqual(
+              [...plan.expectedSkippedIds].sort(),
+            );
+            for (const skipped of result.skippedSources) {
+              expect(skipped.reason).toBe(DISALLOWED_REASON);
+              expect(skipped.sourceRef.captureId).toBe(
+                skipped.sourceRef.sourceId === ORIGIN_ID
+                  ? // The refused origin keeps the topic's own capture ref.
+                    plan.topic.sourceRef.captureId
+                  : `skipped:${skipped.sourceRef.sourceId}`,
+              );
+              expect(skipped.termsVersion).toBe(TERMS_VERSION);
+            }
+            if (plan.originDisallowed) {
+              // A refused origin stops aggregation with InsufficientData, yet
+              // it is still recorded as skipped and never as unreachable.
+              expect(result.status).toBe("InsufficientData");
+              expect(result.items).toEqual([]);
+              expect(result.unreachableSources).toEqual([]);
+              expect(skippedIds).toEqual([plan.topic.sourceRef.sourceId]);
+              expect((result.reason ?? "")).toContain(
+                plan.topic.sourceRef.sourceId,
+              );
+            }
+            const unreachableIds = new Set(
+              result.unreachableSources.map(({ sourceId }) => sourceId),
+            );
+            for (const id of skippedIds) {
+              expect(unreachableIds.has(id)).toBe(false);
             }
 
             // Every reachable, permitted source still contributed its items.
@@ -461,6 +621,7 @@ describe("ResearchAggregator properties", () => {
             for (const id of result.unreachableSources.map((r) => r.sourceId)) {
               expect(contributed.has(id)).toBe(false);
             }
+            for (const id of skippedIds) expect(contributed.has(id)).toBe(false);
           },
         ),
         { numRuns: 100 },

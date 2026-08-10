@@ -4,6 +4,7 @@ import type { SourceFetcher } from "../adapters/ports.js";
 import type {
   ResearchItem,
   ResearchResult,
+  SkippedSource,
   Topic,
 } from "../domain/content.js";
 import type {
@@ -39,7 +40,12 @@ interface ResolvedOptions {
 
 type SourceOutcome =
   | { readonly kind: "Fetched"; readonly items: readonly ResearchItem[] }
-  | { readonly kind: "Disallowed"; readonly reason: string }
+  | {
+      readonly kind: "Disallowed";
+      readonly reason: string;
+      /** Terms version in effect when access was refused. */
+      readonly termsVersion: string;
+    }
   | {
       readonly kind: "Unreachable";
       readonly reason: string;
@@ -85,6 +91,7 @@ export class ResearchAggregator {
         status: "InsufficientData",
         reason: `Origin source ${topic.sourceRef.sourceId} is unavailable`,
         unreachableSources: [topic.sourceRef],
+        skippedSources: [],
       });
     }
 
@@ -106,17 +113,28 @@ export class ResearchAggregator {
         overallController.signal,
       );
       if (originOutcome.kind !== "Fetched") {
-        const reference =
-          originOutcome.kind === "Unreachable"
-            ? originOutcome.reference
-            : topic.sourceRef;
+        // A permission refusal is recorded as skipped, never as unreachable
+        // (CR-0002); the status and reason are unchanged either way.
         return freezeResult({
           id: resultId,
           topicId: topic.id,
           items: [],
           status: "InsufficientData",
           reason: `Origin source ${origin.id} is unavailable: ${originOutcome.reason}`,
-          unreachableSources: [reference],
+          unreachableSources:
+            originOutcome.kind === "Unreachable" ? [originOutcome.reference] : [],
+          skippedSources:
+            originOutcome.kind === "Disallowed"
+              ? [
+                  skippedSource(
+                    Object.freeze({
+                      ...topic.sourceRef,
+                      termsVersion: originOutcome.termsVersion,
+                    }),
+                    originOutcome,
+                  ),
+                ]
+              : [],
         });
       }
 
@@ -137,10 +155,26 @@ export class ResearchAggregator {
 
       const items = [...originOutcome.items];
       const unreachableSources: SourceReference[] = [];
-      for (const outcome of relatedOutcomes) {
+      const skippedSources: SkippedSource[] = [];
+      for (const [index, outcome] of relatedOutcomes.entries()) {
         if (outcome.kind === "Fetched") items.push(...outcome.items);
         if (outcome.kind === "Unreachable") {
           unreachableSources.push(outcome.reference);
+        }
+        if (outcome.kind === "Disallowed") {
+          // Recorded so an Operator can see the source was excluded on
+          // permission grounds rather than lost to a failure (CR-0002).
+          const source = related[index] as SourceConfig;
+          skippedSources.push(
+            skippedSource(
+              skippedReference(
+                source,
+                capturedAt.toISOString(),
+                outcome.termsVersion,
+              ),
+              outcome,
+            ),
+          );
         }
       }
 
@@ -156,6 +190,7 @@ export class ResearchAggregator {
             }
           : {}),
         unreachableSources,
+        skippedSources,
       });
     } finally {
       clearTimeout(overallTimer);
@@ -191,6 +226,7 @@ export class ResearchAggregator {
           reason:
             permission.reason?.trim() ||
             "Source terms or robots.txt prohibit research access",
+          termsVersion,
         };
       }
 
@@ -399,6 +435,31 @@ function diagnosticReference(
   });
 }
 
+function skippedReference(
+  source: SourceConfig,
+  capturedAt: string,
+  termsVersion: string,
+): SourceReference {
+  return Object.freeze({
+    sourceId: source.id,
+    captureId: `skipped:${source.id}`,
+    url: source.url,
+    capturedAt,
+    termsVersion,
+  });
+}
+
+function skippedSource(
+  sourceRef: SourceReference,
+  outcome: { readonly reason: string; readonly termsVersion: string },
+): SkippedSource {
+  return Object.freeze({
+    sourceRef,
+    reason: outcome.reason,
+    termsVersion: outcome.termsVersion,
+  });
+}
+
 function serializeCursor(cursor: SourceCursor | undefined): string {
   if (cursor === undefined) return "<initial>";
   return JSON.stringify([
@@ -415,5 +476,6 @@ function freezeResult(result: ResearchResult): ResearchResult {
     ...result,
     items: Object.freeze([...result.items]),
     unreachableSources: Object.freeze([...result.unreachableSources]),
+    skippedSources: Object.freeze([...result.skippedSources]),
   });
 }
