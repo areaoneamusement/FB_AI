@@ -21,6 +21,16 @@ import type {
   PipelineRun,
 } from "../src/domain/workflow.js";
 import type { GuardedTransitionCommand } from "../src/adapters/ports.js";
+import type {
+  ArtifactComplianceResult,
+  CopyrightComparison,
+  CopyrightLimits,
+} from "../src/compliance/compliance-checker.js";
+import {
+  DEFAULT_COPYRIGHT_CONSECUTIVE_WORDS,
+  DEFAULT_COPYRIGHT_MATCHED_DRAFT_RATIO,
+  INTERNAL_VI_TOKENIZER_VERSION,
+} from "../src/compliance/compliance-checker.js";
 import { SqliteRepository } from "../src/persistence/sqlite-repository.js";
 
 /**
@@ -112,6 +122,32 @@ const findingArb = fc.record({
   }),
 });
 
+/**
+ * Shape of one artifact's copyright comparisons (CR-0002 criterion 4). The
+ * generated numbers stay internally consistent: every qualifying run reaches
+ * `minRunTokens`, the runs sum to `matchedDraftWords`, and the ratio lands on
+ * the side of the threshold that matches the artifact's recorded verdict.
+ */
+interface CopyrightSpec {
+  readonly minRunTokens: number;
+  /** Extra tokens above `minRunTokens` per qualifying run; never empty. */
+  readonly runExtras: readonly number[];
+  /** Number of compared source captures, i.e. comparisons recorded. */
+  readonly captureCount: number;
+  readonly withCaptureId: boolean;
+}
+
+const copyrightSpecArb: fc.Arbitrary<CopyrightSpec> = fc.record({
+  // 1 is the smallest legal value, 5 the CR-0002 default, 8 a tightened rule set.
+  minRunTokens: fc.constantFrom(1, 2, 5, 8),
+  runExtras: fc.array(fc.integer({ min: 0, max: 4 }), {
+    minLength: 1,
+    maxLength: 3,
+  }),
+  captureCount: fc.integer({ min: 1, max: 2 }),
+  withCaptureId: fc.boolean(),
+});
+
 interface CaseSpec {
   readonly text: string;
   readonly breakdown: readonly {
@@ -128,6 +164,8 @@ interface CaseSpec {
   readonly round: number;
   /** Compliance outcome per platform, aligned with `PLATFORMS`. */
   readonly compliancePassed: readonly boolean[];
+  /** Copyright comparison shape per platform, aligned with `PLATFORMS`. */
+  readonly copyright: readonly CopyrightSpec[];
   readonly categoryCount: number;
 }
 
@@ -143,6 +181,7 @@ const caseSpecArb: fc.Arbitrary<CaseSpec> = fc.record({
     // At least one platform passes so every case also exercises the
     // approval/delivery path; each platform still sees both outcomes.
     .map((flags) => (flags.some(Boolean) ? flags : [true, ...flags.slice(1)])),
+  copyright: fc.array(copyrightSpecArb, { minLength: 3, maxLength: 3 }),
   categoryCount: fc.integer({ min: 1, max: 5 }),
 });
 
@@ -153,9 +192,62 @@ interface CaseRecords {
   readonly revision: DraftRevision;
   readonly report: VerificationReport;
   readonly artifacts: readonly PlatformArtifact[];
-  readonly compliance: readonly ComplianceResult[];
+  /**
+   * The `ArtifactComplianceResult` superset `ComplianceChecker` emits, not the
+   * narrower `ComplianceResult` the repository is typed to. The repository
+   * stores whole-object JSON, so the extra explainability fields — including
+   * each `CopyrightComparison`'s `minRunTokens` and `qualifyingRunLengths` —
+   * must round-trip untouched (CR-0002 criterion 4).
+   */
+  readonly compliance: readonly ArtifactComplianceResult[];
   readonly approval: ApprovalRecord;
   readonly delivery: DeliveryRecord;
+}
+
+/**
+ * Builds the copyright comparisons recorded on one artifact's compliance
+ * result. `passed` drives which side of the 20% ratio threshold the generated
+ * numbers land on, so the stored verdict and the stored evidence agree.
+ */
+function copyrightComparisonsFor(
+  spec: CopyrightSpec,
+  passed: boolean,
+  text: string,
+): readonly CopyrightComparison[] {
+  const limits: CopyrightLimits = {
+    consecutiveWords: DEFAULT_COPYRIGHT_CONSECUTIVE_WORDS,
+    matchedDraftRatio: DEFAULT_COPYRIGHT_MATCHED_DRAFT_RATIO,
+    minRunTokens: spec.minRunTokens,
+  };
+  return Array.from({ length: spec.captureCount }, (_unused, capture) => {
+    const qualifyingRunLengths = spec.runExtras.map(
+      (extra, index) => spec.minRunTokens + extra + ((capture + index) % 2),
+    );
+    const matchedDraftWords = qualifyingRunLengths.reduce(
+      (sum, run) => sum + run,
+      0,
+    );
+    // 1/6 ≈ 16.7% stays below the 20% limit; 1/4 = 25% reaches it.
+    const totalDraftWords = matchedDraftWords * (passed ? 6 : 4);
+    const matchedDraftRatio = matchedDraftWords / totalDraftWords;
+    const longestConsecutiveWords = Math.max(...qualifyingRunLengths);
+    return {
+      ...(spec.withCaptureId
+        ? { sourceCaptureId: label(`bản-chụp-${capture}`, text) }
+        : {}),
+      longestConsecutiveWords,
+      matchedDraftWords,
+      totalDraftWords,
+      matchedDraftRatio,
+      limits,
+      minRunTokens: spec.minRunTokens,
+      qualifyingRunLengths,
+      violatedByConsecutiveWords:
+        longestConsecutiveWords >= limits.consecutiveWords,
+      violatedByMatchedDraftRatio:
+        matchedDraftRatio >= limits.matchedDraftRatio,
+    };
+  });
 }
 
 function buildRecords(spec: CaseSpec): CaseRecords {
@@ -216,6 +308,7 @@ function buildRecords(spec: CaseSpec): CaseRecords {
     ],
     status: "Ok",
     unreachableSources: [],
+    skippedSources: [],
   };
 
   const contentHash = `content-hash-${encodeURIComponent(text).slice(0, 24)}`;
@@ -300,9 +393,10 @@ function buildRecords(spec: CaseSpec): CaseRecords {
     }),
   );
 
-  const compliance: readonly ComplianceResult[] = artifacts.map(
+  const compliance: readonly ArtifactComplianceResult[] = artifacts.map(
     (artifact, index) => {
       const passed = spec.compliancePassed[index] === true;
+      const ruleId = label(`rule-${index}`, text);
       return {
         id: `compliance-${index}`,
         artifactId: artifact.id,
@@ -313,13 +407,37 @@ function buildRecords(spec: CaseSpec): CaseRecords {
         sourceTermsVersions: [sourceRef.termsVersion],
         evaluatorVersion: label("evaluator-v1", text),
         passed,
-        violatedRuleIds: passed ? [] : [label(`rule-${index}`, text)],
+        violatedRuleIds: passed ? [] : [ruleId],
         attributionOk: passed,
         copyrightOk: passed,
         reasons: passed
           ? [label("Đạt toàn bộ quy tắc", text)]
           : [label("Vi phạm quy tắc", text), label("Rủi ro bản quyền", text)],
         checkedAt: CREATED,
+        // Fields ComplianceChecker adds on top of ComplianceResult. They are
+        // absent from the repository's declared type yet must survive the
+        // round trip, `copyrightComparisons` above all (CR-0002 criterion 4).
+        rendererVersion: artifact.rendererVersion,
+        tokenizerVersion: INTERNAL_VI_TOKENIZER_VERSION,
+        evaluatedRuleIds: [ruleId],
+        ruleEvaluations: [
+          {
+            ruleId,
+            ruleVersion: label("rule-v1", text),
+            status: passed ? ("Passed" as const) : ("Violated" as const),
+            ...(passed ? {} : { reason: `Rule ${ruleId} was violated` }),
+          },
+        ],
+        configurationAvailable: true,
+        errors: [],
+        attributionFailures: passed
+          ? []
+          : [`${sourceRef.sourceId}: attribution is required`],
+        copyrightComparisons: copyrightComparisonsFor(
+          spec.copyright[index]!,
+          passed,
+          text,
+        ),
       };
     },
   );
@@ -479,6 +597,69 @@ function expectExact<T>(actual: T | undefined, expected: T): void {
   expect(canonical(actual)).toBe(canonical(expected));
 }
 
+/**
+ * Reads compliance rows back as the `ArtifactComplianceResult` superset that
+ * was written. The repository is typed to the narrower `ComplianceResult`, but
+ * it persists whole-object JSON, so the wider record is what comes back.
+ */
+async function readComplianceResults(
+  repository: SqliteRepository,
+  draftRevisionId: string,
+): Promise<readonly ArtifactComplianceResult[]> {
+  const results: readonly ComplianceResult[] =
+    await repository.listComplianceResultsByDraftRevision(draftRevisionId);
+  return results as readonly ArtifactComplianceResult[];
+}
+
+async function readComplianceResult(
+  repository: SqliteRepository,
+  id: string,
+): Promise<ArtifactComplianceResult | undefined> {
+  const result: ComplianceResult | undefined =
+    await repository.getComplianceResult(id);
+  return result as ArtifactComplianceResult | undefined;
+}
+
+/**
+ * CR-0002 criterion 4: the persisted copyright comparison keeps `minRunTokens`
+ * and its qualifying runs, and the reloaded numbers still explain the ratio
+ * decision. Dropping either field fails here even before the canonical-JSON
+ * comparison, so the round trip is asserted on the fields themselves.
+ */
+function expectCopyrightComparisonsRoundTripped(
+  actual: readonly ArtifactComplianceResult[],
+  expected: readonly ArtifactComplianceResult[],
+): void {
+  expect(actual).toHaveLength(expected.length);
+  actual.forEach((result, index) => {
+    const source = expected[index]!;
+    const comparisons = result.copyrightComparisons;
+    expect(comparisons.length).toBeGreaterThan(0);
+    expect(comparisons.length).toBe(source.copyrightComparisons.length);
+    comparisons.forEach((comparison, position) => {
+      const origin = source.copyrightComparisons[position]!;
+      expect(comparison.minRunTokens).toBe(origin.minRunTokens);
+      expect(comparison.limits.minRunTokens).toBe(origin.minRunTokens);
+      expect([...comparison.qualifyingRunLengths]).toEqual([
+        ...origin.qualifyingRunLengths,
+      ]);
+      expect(comparison.qualifyingRunLengths.length).toBeGreaterThan(0);
+      for (const run of comparison.qualifyingRunLengths) {
+        expect(run).toBeGreaterThanOrEqual(comparison.minRunTokens);
+      }
+      expect(
+        comparison.qualifyingRunLengths.reduce((sum, run) => sum + run, 0),
+      ).toBe(comparison.matchedDraftWords);
+      expect(comparison.matchedDraftRatio).toBe(
+        comparison.matchedDraftWords / comparison.totalDraftWords,
+      );
+      expect(comparison.violatedByMatchedDraftRatio).toBe(
+        comparison.matchedDraftRatio >= comparison.limits.matchedDraftRatio,
+      );
+    });
+  });
+}
+
 function rawPayload(
   database: Database.Database,
   table: string,
@@ -559,14 +740,19 @@ describe("SqliteRepository explainability persistence properties", () => {
             ),
             records.artifacts,
           );
-          expectExact(
-            await repository.listComplianceResultsByDraftRevision(
-              records.revision.id,
-            ),
+          const reloadedCompliance = await readComplianceResults(
+            repository,
+            records.revision.id,
+          );
+          expectExact(reloadedCompliance, records.compliance);
+          expectCopyrightComparisonsRoundTripped(
+            reloadedCompliance,
             records.compliance,
           );
           for (const result of records.compliance) {
-            expectExact(await repository.getComplianceResult(result.id), result);
+            const single = await readComplianceResult(repository, result.id);
+            expectExact(single, result);
+            expectCopyrightComparisonsRoundTripped([single!], [result]);
           }
           expectStoredJson(database, "topics", records.topic.id, records.topic);
           expectStoredJson(
@@ -656,10 +842,13 @@ describe("SqliteRepository explainability persistence properties", () => {
             await repository.getVerificationReport(records.report.id),
             records.report,
           );
-          expectExact(
-            await repository.listComplianceResultsByDraftRevision(
-              records.revision.id,
-            ),
+          const afterRejection = await readComplianceResults(
+            repository,
+            records.revision.id,
+          );
+          expectExact(afterRejection, records.compliance);
+          expectCopyrightComparisonsRoundTripped(
+            afterRejection,
             records.compliance,
           );
           expectExact(
@@ -826,6 +1015,19 @@ describe("SqliteRepository explainability persistence integration", () => {
       ],
       round: 2,
       compliancePassed: [true, false, true],
+      copyright: [
+        // Default minRunTokens with a single run, two captures compared.
+        { minRunTokens: 5, runExtras: [0], captureCount: 2, withCaptureId: true },
+        // Tightened rule set with several qualifying runs.
+        {
+          minRunTokens: 8,
+          runExtras: [4, 0, 2],
+          captureCount: 1,
+          withCaptureId: false,
+        },
+        // Smallest legal minRunTokens.
+        { minRunTokens: 1, runExtras: [0, 3], captureCount: 1, withCaptureId: true },
+      ],
       categoryCount: 3,
     };
     const records = buildRecords(spec);
@@ -866,12 +1068,36 @@ describe("SqliteRepository explainability persistence integration", () => {
         await reader.listVerificationReportsByDraftRevision(records.revision.id),
         [records.report],
       );
-      expectExact(
-        await reader.listComplianceResultsByDraftRevision(records.revision.id),
+      const reloadedCompliance = await readComplianceResults(
+        reader,
+        records.revision.id,
+      );
+      expectExact(reloadedCompliance, records.compliance);
+      // The copyright evidence survives the real file format too, minRunTokens
+      // and qualifying runs included (CR-0002 criterion 4).
+      expectCopyrightComparisonsRoundTripped(
+        reloadedCompliance,
         records.compliance,
       );
+      expect(
+        reloadedCompliance.map((result) =>
+          result.copyrightComparisons.map((comparison) => [
+            comparison.minRunTokens,
+            [...comparison.qualifyingRunLengths],
+          ]),
+        ),
+      ).toEqual([
+        [
+          [5, [5]],
+          [5, [6]],
+        ],
+        [[8, [12, 9, 10]]],
+        [[1, [1, 5]]],
+      ]);
       for (const result of records.compliance) {
-        expectExact(await reader.getComplianceResult(result.id), result);
+        const single = await readComplianceResult(reader, result.id);
+        expectExact(single, result);
+        expectCopyrightComparisonsRoundTripped([single!], [result]);
       }
       expect(
         (

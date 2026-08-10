@@ -7,6 +7,12 @@ import type {
 
 export const DEFAULT_COPYRIGHT_CONSECUTIVE_WORDS = 50;
 export const DEFAULT_COPYRIGHT_MATCHED_DRAFT_RATIO = 0.2;
+/**
+ * Minimum contiguous matched-token run that counts as verbatim copying for the
+ * matched-ratio measure (CR-0002, Change 1). Shorter overlap is incidental
+ * vocabulary sharing and must not accumulate toward the ratio threshold.
+ */
+export const DEFAULT_COPYRIGHT_MIN_RUN_TOKENS = 5;
 export const DEFAULT_COMPLIANCE_TIMEOUT_MS = 30_000;
 export const INTERNAL_VI_TOKENIZER_VERSION = "fb-ai-unicode-vi-word-v1";
 
@@ -51,6 +57,8 @@ export interface SourceCapture {
 export interface CopyrightLimits {
   readonly consecutiveWords: number;
   readonly matchedDraftRatio: number;
+  /** Shortest contiguous matched run that counts toward `matchedDraftRatio`. */
+  readonly minRunTokens: number;
 }
 
 export interface CopyrightComparison {
@@ -60,6 +68,14 @@ export interface CopyrightComparison {
   readonly totalDraftWords: number;
   readonly matchedDraftRatio: number;
   readonly limits: CopyrightLimits;
+  /** Effective `minRunTokens` used for this comparison. */
+  readonly minRunTokens: number;
+  /**
+   * Lengths of the contiguous draft spans that qualified as copied passages, in
+   * draft order. Every entry is at least `minRunTokens`, and the entries sum to
+   * `matchedDraftWords`, so the ratio decision is reproducible and explainable.
+   */
+  readonly qualifyingRunLengths: readonly number[];
   readonly violatedByConsecutiveWords: boolean;
   readonly violatedByMatchedDraftRatio: boolean;
 }
@@ -164,6 +180,7 @@ function copyrightText(artifact: PlatformArtifact): string {
 function validLimits(parameters: Readonly<Record<string, unknown>>): CopyrightLimits | undefined {
   const consecutiveWords = parameters.consecutiveWords ?? DEFAULT_COPYRIGHT_CONSECUTIVE_WORDS;
   const matchedDraftRatio = parameters.matchedDraftRatio ?? DEFAULT_COPYRIGHT_MATCHED_DRAFT_RATIO;
+  const minRunTokens = parameters.minRunTokens ?? DEFAULT_COPYRIGHT_MIN_RUN_TOKENS;
   if (
     typeof consecutiveWords !== "number" ||
     !Number.isInteger(consecutiveWords) ||
@@ -171,52 +188,87 @@ function validLimits(parameters: Readonly<Record<string, unknown>>): CopyrightLi
     typeof matchedDraftRatio !== "number" ||
     !Number.isFinite(matchedDraftRatio) ||
     matchedDraftRatio <= 0 ||
-    matchedDraftRatio > 1
+    matchedDraftRatio > 1 ||
+    typeof minRunTokens !== "number" ||
+    !Number.isInteger(minRunTokens) ||
+    minRunTokens < 1
   ) {
     return undefined;
   }
-  return { consecutiveWords, matchedDraftRatio };
+  return { consecutiveWords, matchedDraftRatio, minRunTokens };
 }
 
+/**
+ * Compares a draft against captured origin sources for verbatim copying.
+ *
+ * Two independent measures (Requirement 6.5, both inclusive):
+ * - `longestConsecutiveWords`: the longest contiguous matched token run.
+ * - `matchedDraftRatio`: the share of draft tokens that belong to a contiguous
+ *   matched run of at least `limits.minRunTokens` tokens. Isolated overlap of
+ *   common words never contributes (CR-0002, Change 1).
+ */
 export function compareCopyright(
   draftText: string,
   captures: readonly SourceCapture[],
   limits: CopyrightLimits = {
     consecutiveWords: DEFAULT_COPYRIGHT_CONSECUTIVE_WORDS,
     matchedDraftRatio: DEFAULT_COPYRIGHT_MATCHED_DRAFT_RATIO,
+    minRunTokens: DEFAULT_COPYRIGHT_MIN_RUN_TOKENS,
   },
 ): CopyrightComparison {
   const draftTokens = tokenizeForCopyright(draftText);
-  const matchedPositions = new Set<number>();
+  const minRunTokens = limits.minRunTokens;
+  /** 1 when the draft token belongs to a qualifying copied run of some capture. */
+  const inQualifyingRun = new Uint8Array(draftTokens.length);
   let longestConsecutiveWords = 0;
   let longestSourceCaptureId: string | undefined;
 
   for (const capture of captures) {
     const sourceTokens = tokenizeForCopyright(capture.content);
-    const sourceVocabulary = new Set(sourceTokens);
-    draftTokens.forEach((token, index) => {
-      if (sourceVocabulary.has(token)) matchedPositions.add(index);
-    });
-
     let previous = new Uint32Array(sourceTokens.length + 1);
+    let current = new Uint32Array(sourceTokens.length + 1);
     for (let draftIndex = 1; draftIndex <= draftTokens.length; draftIndex += 1) {
-      const current = new Uint32Array(sourceTokens.length + 1);
+      current.fill(0);
+      let longestRunEndingHere = 0;
       for (let sourceIndex = 1; sourceIndex <= sourceTokens.length; sourceIndex += 1) {
         if (draftTokens[draftIndex - 1] === sourceTokens[sourceIndex - 1]) {
           const runLength = previous[sourceIndex - 1] + 1;
           current[sourceIndex] = runLength;
+          if (runLength > longestRunEndingHere) longestRunEndingHere = runLength;
           if (runLength > longestConsecutiveWords) {
             longestConsecutiveWords = runLength;
             longestSourceCaptureId = capture.captureId;
           }
         }
       }
+      // The longest run ending at this draft token subsumes every shorter run
+      // ending here, so marking it covers all qualifying positions exactly.
+      if (longestRunEndingHere >= minRunTokens) {
+        for (let offset = 0; offset < longestRunEndingHere; offset += 1) {
+          inQualifyingRun[draftIndex - 1 - offset] = 1;
+        }
+      }
+      const reused = previous;
       previous = current;
+      current = reused;
     }
   }
 
+  const qualifyingRunLengths: number[] = [];
+  let matchedDraftWords = 0;
+  let openRun = 0;
+  for (let index = 0; index < inQualifyingRun.length; index += 1) {
+    if (inQualifyingRun[index] === 1) {
+      openRun += 1;
+      matchedDraftWords += 1;
+    } else if (openRun > 0) {
+      qualifyingRunLengths.push(openRun);
+      openRun = 0;
+    }
+  }
+  if (openRun > 0) qualifyingRunLengths.push(openRun);
+
   const totalDraftWords = draftTokens.length;
-  const matchedDraftWords = matchedPositions.size;
   const matchedDraftRatio = totalDraftWords === 0 ? 0 : matchedDraftWords / totalDraftWords;
   return {
     sourceCaptureId: longestSourceCaptureId,
@@ -225,6 +277,8 @@ export function compareCopyright(
     totalDraftWords,
     matchedDraftRatio,
     limits,
+    minRunTokens,
+    qualifyingRunLengths: Object.freeze(qualifyingRunLengths),
     violatedByConsecutiveWords: longestConsecutiveWords >= limits.consecutiveWords,
     violatedByMatchedDraftRatio: totalDraftWords > 0 && matchedDraftRatio >= limits.matchedDraftRatio,
   };

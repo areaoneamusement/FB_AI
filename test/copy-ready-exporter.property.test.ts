@@ -160,6 +160,99 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
   idempotencyKey: fc.constantFrom("key-a", "khóa-🚀", "export-key-1"),
 });
 
+// ---------------------------------------------------------------------------
+// Pinned examples
+//
+// The coverage guard at the end of the property demands one occurrence of every
+// label in `required`. Some of those labels need a rare conjunction of draws
+// (`exported:YouTube` needs stage Approved + platform YouTube + inApproval +
+// hashMode "match" + non-blank body and attribution + all three YouTube
+// metadata fields filled at once), so relying on the random generator makes the
+// guard seed-dependent and flaky. Every required label is therefore produced by
+// an explicit example below, which makes coverage deterministic on every seed
+// and independent of `numRuns`; the random runs remain as extra exploration.
+// ---------------------------------------------------------------------------
+
+function spec(overrides: Partial<ArtifactSpec> = {}): ArtifactSpec {
+  return {
+    platform: "Facebook_Page",
+    rendererVersion: "renderer-v1",
+    body: "Cập nhật công cụ AI mới nhất 🚀",
+    attribution: "Nguồn: https://origin.example/ai-update",
+    metadata: {},
+    imageSuggestions: [],
+    inApproval: true,
+    ...overrides,
+  };
+}
+
+/** All three YouTube metadata fields present and non-blank. */
+const YOUTUBE_METADATA_FILLED: Readonly<Record<string, string>> = {
+  title: "Cập nhật công cụ AI mới nhất",
+  description: "ảnh minh hoạ từng bước 👩‍💻🧠",
+  tags: "AI update",
+};
+
+/** All three present but whitespace-only. */
+const YOUTUBE_METADATA_BLANK: Readonly<Record<string, string>> = {
+  title: "",
+  description: " ",
+  tags: "\t\n  ",
+};
+
+function pinned(overrides: Partial<Scenario> = {}): [Scenario] {
+  return [
+    {
+      stage: "Approved",
+      artifacts: [spec()],
+      targetPick: 0,
+      hashMode: "match",
+      targetId: "target-page",
+      idempotencyKey: "key-a",
+      ...overrides,
+    },
+  ];
+}
+
+const EXPORT_EXAMPLES: readonly [Scenario][] = [
+  // outcome:CONTENT_NOT_APPROVED plus every non-Approved stage label.
+  ...NON_APPROVED_STAGES.map((stage) => pinned({ stage })),
+
+  // outcome:Exported, approved:true, hash:match and one label per platform.
+  ...PLATFORMS.map((platform) =>
+    pinned({
+      artifacts: [
+        spec({
+          platform,
+          metadata:
+            platform === "YouTube" ? YOUTUBE_METADATA_FILLED : { "chủ_đề🚀": "AI" },
+        }),
+      ],
+      targetId: platform === "YouTube" ? "kênh-youtube" : "nhóm-🚀",
+    }),
+  ),
+
+  // hash:mismatch -> APPROVAL_ARTIFACT_MISMATCH on an otherwise valid export.
+  ...[pinned({ hashMode: "mismatch" })],
+
+  // hash:blank -> outcome:INVALID_DELIVERY_COMMAND (blank command hash).
+  ...[pinned({ hashMode: "blank" })],
+
+  // A blank targetId is the other INVALID_DELIVERY_COMMAND route.
+  ...[pinned({ targetId: "   " })],
+
+  // approved:false -> the artifact exists but is not in the approval record.
+  ...[pinned({ artifacts: [spec({ inApproval: false })] })],
+
+  // outcome:ARTIFACT_NOT_COPY_READY via a blank body, and via a blank attribution.
+  ...[pinned({ artifacts: [spec({ body: "" })] })],
+  ...[pinned({ artifacts: [spec({ attribution: "\t\n  " })] })],
+
+  // youtube:<field>:blank and youtube:<field>:absent for all three fields.
+  ...[pinned({ artifacts: [spec({ platform: "YouTube", metadata: YOUTUBE_METADATA_BLANK })] })],
+  ...[pinned({ artifacts: [spec({ platform: "YouTube", metadata: {} })] })],
+];
+
 function hasText(value: string | undefined): boolean {
   return value !== undefined && value.trim().length > 0;
 }
@@ -457,7 +550,7 @@ describe("CopyReadyExporter properties", () => {
         ).toBe(1);
         expect(await reader.getExportBundle(bundleId)).toEqual(bundle);
       }),
-      { numRuns: 300 },
+      { numRuns: 300, examples: [...EXPORT_EXAMPLES] },
     );
 
     const required = [

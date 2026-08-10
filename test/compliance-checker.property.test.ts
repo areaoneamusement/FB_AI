@@ -20,15 +20,23 @@ import type {
  * Property tests for Compliance_Checker (Requirement 6).
  *
  * Interpretation notes used by these tests:
- * - Boundary semantics are inclusive, exactly as tasks.md task 9.1 states:
- *   "≥50 consecutive words OR ≥20% of total words, whichever first".
- * - Requirement 6.5 offers the 20% figure as an alternative measure of verbatim
- *   copying. design.md ("Compliance Checker") resolves the ambiguity explicitly:
- *   the evaluator "compares contiguous normalized token runs and total matched
- *   draft tokens". The ratio measure therefore counts distinct matched draft
- *   token positions, not contiguous matched runs. The generators below cover
- *   both shapes (one contiguous verbatim block, and scattered matched words with
- *   a maximum run of one word) so the two measures are exercised separately.
+ * - Boundary semantics are inclusive for both measures, as tasks.md task 9.1
+ *   states ("≥50 consecutive words OR ≥20% of total words, whichever first")
+ *   and as Requirement 6.5 now says in words ("đạt hoặc vượt quá giới hạn").
+ *   CR-0002 Change 2 resolved the earlier "vượt quá" / `>=` contradiction in
+ *   favour of the inclusive reading, because for a copyright control the
+ *   inclusive boundary is the safe one.
+ * - CR-0002 Change 1 redefines the 20% measure so that it measures copied
+ *   passages instead of vocabulary overlap: a draft token counts toward
+ *   `matchedDraftWords` / `matchedDraftRatio` only when it belongs to a
+ *   contiguous matched run of at least `limits.minRunTokens` tokens (default 5,
+ *   configurable per rule set). Isolated overlap of common Vietnamese function
+ *   words therefore contributes nothing, and `CopyrightComparison` reports
+ *   `minRunTokens` plus the `qualifyingRunLengths` that produced the ratio.
+ *   The 50-consecutive-word measure is unchanged and still counts every run.
+ *   The generators below cover three shapes: one long contiguous verbatim block,
+ *   several shorter copied fragments that each reach `minRunTokens`, and
+ *   scattered single-token overlap that must never count.
  */
 
 const CHECKED_AT = new Date("2025-06-01T02:00:00.000Z");
@@ -418,11 +426,16 @@ async function checkCopyright(
   });
 }
 
+/** Default `CopyrightLimits.minRunTokens` (CR-0002 Change 1). */
+const DEFAULT_MIN_RUN_TOKENS = 5;
+
 interface CopyrightPlan {
   readonly draftWords: readonly string[];
   readonly sourceWords: readonly string[];
+  /** Draft tokens inside a qualifying copied run, i.e. the expected ratio numerator. */
   readonly matched: number;
   readonly longest: number;
+  readonly qualifyingRunLengths: readonly number[];
 }
 
 /** One contiguous verbatim block copied from the source; all filler is disjoint. */
@@ -430,6 +443,7 @@ function planContiguousRun(
   style: WordStyle,
   total: number,
   runLength: number,
+  minRunTokens: number = DEFAULT_MIN_RUN_TOKENS,
 ): CopyrightPlan {
   const shared = Array.from({ length: runLength }, (_, index) => makeWord(style, "s", index));
   const draftWords: string[] = [];
@@ -449,21 +463,86 @@ function planContiguousRun(
     ...shared,
     makeWord(style, "o", 3),
   ];
-  return { draftWords, sourceWords, matched: runLength, longest: runLength };
+  const qualifies = runLength >= minRunTokens;
+  return {
+    draftWords,
+    sourceWords,
+    matched: qualifies ? runLength : 0,
+    longest: runLength,
+    qualifyingRunLengths: qualifies ? [runLength] : [],
+  };
 }
 
-/** Scattered matched words: maximum contiguous matched run is one word. */
-function planScatteredRatio(
+/** Splits `matched` tokens into as many runs as possible that each reach `minRunTokens`. */
+function qualifyingRunSplit(
+  matched: number,
+  minRunTokens: number,
+  maxRuns: number,
+): readonly number[] {
+  if (matched < minRunTokens) return [];
+  const runs = Math.max(1, Math.min(maxRuns, Math.floor(matched / minRunTokens)));
+  const lengths = Array.from({ length: runs }, () => Math.floor(matched / runs));
+  for (let remainder = matched - lengths[0]! * runs, index = 0; remainder > 0; remainder -= 1) {
+    lengths[index] = lengths[index]! + 1;
+    index = (index + 1) % runs;
+  }
+  return lengths;
+}
+
+/**
+ * Several copied fragments, each a contiguous run of at least `minRunTokens`
+ * tokens, separated by disjoint filler so the runs never merge. Every fragment
+ * token counts toward the ratio.
+ */
+function planFragmentRuns(
   style: WordStyle,
   total: number,
   matched: number,
+  minRunTokens: number = DEFAULT_MIN_RUN_TOKENS,
 ): CopyrightPlan {
-  const shared = Array.from({ length: matched }, (_, index) => makeWord(style, "s", index));
+  const runLengths = qualifyingRunSplit(matched, minRunTokens, 4);
+  const draftWords: string[] = [];
+  const sourceWords: string[] = [makeWord(style, "o", 0)];
+  let shared = 0;
+  let filler = 0;
+  for (const runLength of runLengths) {
+    const fragment = Array.from({ length: runLength }, () => makeWord(style, "s", shared++));
+    // Filler before each fragment keeps the qualifying runs distinct.
+    draftWords.push(makeWord(style, "d", filler++));
+    draftWords.push(...fragment);
+    sourceWords.push(...fragment, makeWord(style, "o", 1000 + shared));
+  }
+  if (draftWords.length > total) {
+    throw new Error(`plan needs ${draftWords.length} tokens but total is ${total}`);
+  }
+  while (draftWords.length < total) {
+    draftWords.push(makeWord(style, "d", filler++));
+  }
+  return {
+    draftWords,
+    sourceWords,
+    matched: runLengths.reduce((sum, length) => sum + length, 0),
+    longest: runLengths.length === 0 ? 0 : Math.max(...runLengths),
+    qualifyingRunLengths: runLengths,
+  };
+}
+
+/**
+ * Scattered single-token overlap: the maximum contiguous matched run is one
+ * token, so under CR-0002 Change 1 nothing counts toward the ratio however much
+ * vocabulary is shared.
+ */
+function planScatteredOverlap(
+  style: WordStyle,
+  total: number,
+  sharedCount: number,
+): CopyrightPlan {
+  const shared = Array.from({ length: sharedCount }, (_, index) => makeWord(style, "s", index));
   const draftWords: string[] = [];
   let taken = 0;
   let filler = 0;
   for (let index = 0; index < total; index += 1) {
-    if (index % 2 === 0 && taken < matched) {
+    if (index % 2 === 0 && taken < sharedCount) {
       draftWords.push(shared[taken]!);
       taken += 1;
     } else {
@@ -477,13 +556,19 @@ function planScatteredRatio(
     sourceWords.push(word);
   });
   sourceWords.push(makeWord(style, "o", 9999));
-  return { draftWords, sourceWords, matched, longest: matched > 0 ? 1 : 0 };
+  return {
+    draftWords,
+    sourceWords,
+    matched: 0,
+    longest: sharedCount > 0 ? 1 : 0,
+    qualifyingRunLengths: [],
+  };
 }
 
 describe("Compliance_Checker copyright limits", () => {
   // Feature: fb-ai, Property 23: Verbatim copying beyond the limit is flagged
   // **Validates: Requirements 6.5**
-  it("flags an artifact exactly when copying reaches 50 consecutive words or 20% of draft words", async () => {
+  it("flags an artifact exactly when copying reaches 50 consecutive words or 20% of draft words in runs of at least minRunTokens", async () => {
     let generatedCases = 0;
     await fc.assert(
       fc.asyncProperty(
@@ -496,34 +581,59 @@ describe("Compliance_Checker copyright limits", () => {
             amount: fc.constantFrom(0, 1, 12, 48, 49, 50, 51, 120),
           }),
           fc.record({
-            kind: fc.constant<"ratio">("ratio"),
+            kind: fc.constant<"fragments">("fragments"),
+            total: fc.constantFrom(100, 200),
+            amount: fc.constantFrom(0, 10, 19, 20, 21, 50),
+          }),
+          fc.record({
+            kind: fc.constant<"scattered">("scattered"),
             total: fc.constantFrom(100, 200),
             amount: fc.constantFrom(0, 10, 19, 20, 21, 50),
           }),
         ),
         async (style, form, scenario) => {
           generatedCases += 1;
-          const matched = scenario.kind === "run"
-            ? scenario.amount
-            : (scenario.total * scenario.amount) / 100;
+          const targeted = (scenario.total * scenario.amount) / 100;
           const plan = scenario.kind === "run"
             ? planContiguousRun(style, scenario.total, scenario.amount)
-            : planScatteredRatio(style, scenario.total, matched);
+            : scenario.kind === "fragments"
+              ? planFragmentRuns(style, scenario.total, targeted)
+              : planScatteredOverlap(style, scenario.total, targeted);
 
           const result = await checkCopyright(plan.draftWords, plan.sourceWords, form);
           const [comparison] = result.copyrightComparisons;
           expect(comparison).toBeDefined();
           if (comparison === undefined) return;
 
-          expect(comparison.limits).toEqual({ consecutiveWords: 50, matchedDraftRatio: 0.2 });
+          expect(comparison.limits).toEqual({
+            consecutiveWords: 50,
+            matchedDraftRatio: 0.2,
+            minRunTokens: DEFAULT_MIN_RUN_TOKENS,
+          });
+          expect(comparison.minRunTokens).toBe(DEFAULT_MIN_RUN_TOKENS);
           expect(comparison.totalDraftWords).toBe(scenario.total);
           expect(comparison.matchedDraftWords).toBe(plan.matched);
           expect(comparison.longestConsecutiveWords).toBe(plan.longest);
+
+          // The ratio numerator is exactly the qualifying copied runs, and every
+          // qualifying run reaches minRunTokens, so the decision is explainable.
+          expect([...comparison.qualifyingRunLengths]).toEqual([...plan.qualifyingRunLengths]);
+          for (const runLength of comparison.qualifyingRunLengths) {
+            expect(runLength).toBeGreaterThanOrEqual(DEFAULT_MIN_RUN_TOKENS);
+          }
+          expect(
+            comparison.qualifyingRunLengths.reduce((sum, length) => sum + length, 0),
+          ).toBe(comparison.matchedDraftWords);
 
           const violatedByRun = plan.longest >= 50;
           const violatedByRatio = plan.matched / scenario.total >= 0.2;
           expect(comparison.violatedByConsecutiveWords).toBe(violatedByRun);
           expect(comparison.violatedByMatchedDraftRatio).toBe(violatedByRatio);
+          // Scattered single-token overlap never counts, at any volume.
+          if (scenario.kind === "scattered") {
+            expect(comparison.matchedDraftWords).toBe(0);
+            expect(comparison.violatedByMatchedDraftRatio).toBe(false);
+          }
 
           const flagged = violatedByRun || violatedByRatio;
           expect(result.copyrightOk).toBe(!flagged);
@@ -547,10 +657,82 @@ describe("Compliance_Checker copyright limits", () => {
     expect((await checkCopyright(run50.draftWords, run50.sourceWords, "plain")).copyrightOk).toBe(false);
 
     for (const [percent, expectedOk] of [[19, true], [20, false], [21, false]] as const) {
-      const plan = planScatteredRatio("vietnamese", 100, percent);
+      const plan = planFragmentRuns("vietnamese", 100, percent);
       const result = await checkCopyright(plan.draftWords, plan.sourceWords, "nfd-html");
+      expect(result.copyrightComparisons[0]?.matchedDraftWords).toBe(percent);
       expect(result.copyrightComparisons[0]?.matchedDraftRatio).toBe(percent / 100);
       expect(result.copyrightOk).toBe(expectedOk);
+    }
+  });
+
+  // CR-0002 Change 1, acceptance criterion 1: the headline false positive.
+  it("passes a draft that shares only isolated common Vietnamese function words with a capture", async () => {
+    const functionWords = ["và", "của", "là", "cho", "một", "được"] as const;
+    const draftWords: string[] = [];
+    functionWords.forEach((word, index) => {
+      draftWords.push(word, `zqd${index}a`, `zqd${index}b`);
+    });
+    const capture = [
+      "một", "bản", "tin", "và", "hướng", "dẫn", "của", "biên", "tập",
+      "là", "tài", "liệu", "cho", "bạn", "đọc", "được", "phát", "hành",
+    ];
+
+    const result = await checkCopyright(draftWords, capture, "plain");
+    const [comparison] = result.copyrightComparisons;
+    expect(comparison).toBeDefined();
+    if (comparison === undefined) return;
+
+    // A third of the draft's tokens occur in the capture, which the pre-CR-0002
+    // vocabulary measure would have scored at 33% and flagged.
+    expect(functionWords.length / draftWords.length).toBeGreaterThanOrEqual(0.2);
+    expect(comparison.longestConsecutiveWords).toBe(1);
+    expect(comparison.matchedDraftWords).toBe(0);
+    expect(comparison.matchedDraftRatio).toBe(0);
+    expect([...comparison.qualifyingRunLengths]).toEqual([]);
+    expect(comparison.violatedByMatchedDraftRatio).toBe(false);
+    expect(result.copyrightOk).toBe(true);
+    expect(result.passed).toBe(true);
+  });
+
+  it("honours a rule-configured minRunTokens and fails closed on an invalid one", async () => {
+    for (const minRunTokens of [3, 8] as const) {
+      const atLimit = planContiguousRun("ascii", 400, minRunTokens, minRunTokens);
+      const belowLimit = planContiguousRun("ascii", 400, minRunTokens - 1, minRunTokens);
+      const parameters = { minRunTokens, matchedDraftRatio: minRunTokens / 400 };
+
+      const atResult = await checkCopyright(atLimit.draftWords, atLimit.sourceWords, "plain", parameters);
+      const atComparison = atResult.copyrightComparisons[0];
+      expect(atComparison?.limits.minRunTokens).toBe(minRunTokens);
+      expect(atComparison?.minRunTokens).toBe(minRunTokens);
+      expect(atComparison?.matchedDraftWords).toBe(minRunTokens);
+      expect([...(atComparison?.qualifyingRunLengths ?? [])]).toEqual([minRunTokens]);
+      expect(atComparison?.violatedByMatchedDraftRatio).toBe(true);
+      expect(atResult.copyrightOk).toBe(false);
+
+      const belowResult = await checkCopyright(belowLimit.draftWords, belowLimit.sourceWords, "plain", parameters);
+      const belowComparison = belowResult.copyrightComparisons[0];
+      expect(belowComparison?.longestConsecutiveWords).toBe(minRunTokens - 1);
+      expect(belowComparison?.matchedDraftWords).toBe(0);
+      expect([...(belowComparison?.qualifyingRunLengths ?? [])]).toEqual([]);
+      expect(belowComparison?.violatedByMatchedDraftRatio).toBe(false);
+      expect(belowResult.copyrightOk).toBe(true);
+    }
+
+    // An invalid minRunTokens fails closed on the existing invalid-parameter path.
+    for (const invalid of [0, -1, 2.5, "5"] as const) {
+      const plan = planContiguousRun("ascii", 100, 10);
+      const result = await checkCopyright(plan.draftWords, plan.sourceWords, "plain", { minRunTokens: invalid });
+      expect(result.passed).toBe(false);
+      expect(result.configurationAvailable).toBe(false);
+      expect(result.copyrightComparisons).toHaveLength(1);
+      expect(
+        result.ruleEvaluations.every((evaluation) => evaluation.status === "ConfigUnavailable"),
+      ).toBe(true);
+      expect(
+        result.errors.some((error) =>
+          error.code === "CONFIG_UNAVAILABLE" && error.detail.includes("Invalid parameters")
+        ),
+      ).toBe(true);
     }
   });
 });

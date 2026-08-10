@@ -42,6 +42,18 @@ export interface ResearchItem {
   readonly modelProvenance?: ReproducibilityMetadata & { readonly confidence?: number };
 }
 
+/**
+ * A source deliberately excluded from research because its terms or robots.txt
+ * did not permit access. Kept distinct from `unreachableSources`, which holds
+ * only failures and timeouts, so "we were not allowed to read this" is never
+ * conflated with "this failed" (CR-0002).
+ */
+export interface SkippedSource {
+  readonly sourceRef: SourceReference;
+  readonly reason: string;
+  readonly termsVersion: string;
+}
+
 export interface ResearchResult {
   readonly id: string;
   readonly topicId: string;
@@ -49,6 +61,7 @@ export interface ResearchResult {
   readonly status: "Ok" | "InsufficientData";
   readonly reason?: string;
   readonly unreachableSources: readonly SourceReference[];
+  readonly skippedSources: readonly SkippedSource[];
 }
 
 export interface ImageSuggestion {

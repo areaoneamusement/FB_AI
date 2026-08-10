@@ -680,6 +680,37 @@ No failure deletes prior content or evidence. Operator notifications are dedupli
 
 The following properties are implementation invariants. The test type is selected by behavior rather than forcing every property into property-based testing.
 
+> **Numbering note.** The 16 entries below are *aggregate* invariants stated at design granularity. `tasks.md` decomposes them into 33 finer-grained, test-level properties, and the two numbering schemes are independent: design Property 14 is "Concurrent mutations are serialized" while `tasks.md` Property 14 is "Generated drafts satisfy the multi-format structure". The `// Feature: fb-ai, Property N: ...` tags in the test suite use the **`tasks.md`** numbering, never the design numbering. Use the mapping table below to move between the two.
+
+### Design property → `tasks.md` property mapping
+
+| Design property | `tasks.md` properties | Test file (`test/`) |
+| --- | --- | --- |
+| 1. Collection is bounded, permitted, and idempotent | 1, 2, 3, 4, 5, 6 | `source-collector.property.test.ts` |
+| 2. Scoring and ranking are deterministic | 7, 8, 9, 10 | `topic-scorer.property.test.ts` |
+| 3. Research has usable provenance | 11, 12, 13; plus 19 for the "inference alone cannot substantiate a factual pass" clause (Req 5.2) | `research-aggregator.property.test.ts`; `verification-engine.property.test.ts` |
+| 4. Generated revisions satisfy every format contract | 14, 15, 16, 17 | `content-generator.property.test.ts` |
+| 5. Revisions are immutable and monotonic | 31 (revision N+1, exact reload), 33 (artifacts persist across guarded transitions) | `review-dashboard-api.property.test.ts`; `sqlite-repository.property.test.ts` |
+| 6. Verification covers every extracted claim | 18, 19, 20 | `verification-engine.property.test.ts` |
+| 7. Verification loops are bounded | 20 (`maxRounds` exhausted ⇒ blocked, never auto-approved) | `verification-engine.property.test.ts` |
+| 8. Compliance checks exact artifacts | 21, 22; 33 for the persisted-result clause (Req 6.6) | `compliance-checker.property.test.ts`; `sqlite-repository.property.test.ts` |
+| 9. Copyright boundaries are deterministic | 23 | `compliance-checker.property.test.ts` |
+| 10. Editing invalidates downstream gates | 29, 31 | `review-dashboard-api.property.test.ts` |
+| 11. Approval and delivery are hash-bound | 27, 28, 32 | `content-pipeline.property.test.ts`; `copy-ready-exporter.property.test.ts` |
+| 12. Deliveries are independent and idempotent | 32 only, and only for export idempotence / exact-hash binding | `copy-ready-exporter.property.test.ts` |
+| 13. Workflow transitions are guarded and adjacent | 24, 25 | `content-pipeline.property.test.ts` |
+| 14. Concurrent mutations are serialized | **No test-level counterpart in Phase 1** | — |
+| 15. Transactions and worker recovery preserve exactly-once effects | **No test-level counterpart in Phase 1** | — |
+| 16. Rejection and blocking preserve evidence | 25, 30, 33 | `content-pipeline.property.test.ts`; `review-dashboard-api.property.test.ts`; `sqlite-repository.property.test.ts` |
+
+Coverage notes for the rows that are not a clean one-to-many mapping:
+
+- **Design 12** is only partially reachable in Phase 1. The single wired `OutputPort` implementation is `CopyReadyExporter`, so `tasks.md` Property 32 covers byte-identical, idempotent, hash-bound export. Multi-target independence and delivery idempotency keys (Reqs 9.3–9.6) belong to the deferred `ApiPublisher`/`Group_Manager` adapters and are out of Phase 1 scope.
+- **Design 14 is not covered in Phase 1.** Phase 1 runs the pipeline sequentially with a single actor, so there is no concurrent command path to exercise. The optimistic-version guard itself is exercised as a *single-command* stale-version rejection inside `tasks.md` Property 28, and the port contract is asserted at type level in `test/ports.type-test.ts`, but no property drives two competing mutations at one expected version.
+- **Design 15 is not covered in Phase 1.** Phase 1 has no durable worker, lease, outbox, or follow-up job machinery — transitions are executed in-process — so there is nothing to re-execute after a lease expiry and no exactly-once recovery behavior to assert.
+- Several clauses of design properties are intentionally verified by example-based rather than property tests, and therefore carry no `tasks.md` property number: Req 5.7 model unresponsiveness (task 8.5), Req 6.7 missing compliance config (task 9.5), Req 7.7 automatic-stage timeout (task 11.7), Req 8.9 save-failure rollback (task 14.5), Req 1.3 fetch timeout (task 3.8), Req 3.5 related-source timeout (task 5.5), and Req 4.4 brand voice (task 6.6).
+- **Gap in the other direction:** `tasks.md` Property 26 ("Every topic has 1–5 categories from the predefined set", Req 7.4) maps to **no** design property. Design Property 13 covers Reqs 7.1, 7.2, 7.3, 7.7 but not the category-assignment invariant.
+
 ### Property 1: Collection is bounded, permitted, and idempotent
 
 For any collection cycle, every accepted item is within the configured time window, every `(sourceId, externalId)` is unique, replay creates no additional topic, source permission metadata is retained, and one failing/disallowed source does not discard or block successful sources.

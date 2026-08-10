@@ -163,13 +163,42 @@ test("uses deterministic Vietnamese normalization and exact copyright boundaries
     content: words.slice(0, count).join(" "),
   });
 
-  const run49 = compareCopyright(text, [source(49)], { consecutiveWords: 50, matchedDraftRatio: 1 });
-  const run50 = compareCopyright(text, [source(50)], { consecutiveWords: 50, matchedDraftRatio: 1 });
-  const ratio19 = compareCopyright(text, [source(19)], { consecutiveWords: 50, matchedDraftRatio: 0.2 });
-  const ratio20 = compareCopyright(text, [source(20)], { consecutiveWords: 50, matchedDraftRatio: 0.2 });
+  const limits = { consecutiveWords: 50, matchedDraftRatio: 1, minRunTokens: 5 };
+  const ratioLimits = { ...limits, matchedDraftRatio: 0.2 };
+  const run49 = compareCopyright(text, [source(49)], limits);
+  const run50 = compareCopyright(text, [source(50)], limits);
+  const ratio19 = compareCopyright(text, [source(19)], ratioLimits);
+  const ratio20 = compareCopyright(text, [source(20)], ratioLimits);
 
   assert.equal(run49.violatedByConsecutiveWords, false);
   assert.equal(run50.violatedByConsecutiveWords, true);
   assert.equal(ratio19.violatedByMatchedDraftRatio, false);
   assert.equal(ratio20.violatedByMatchedDraftRatio, true);
+  assert.deepEqual(ratio20.qualifyingRunLengths, [20]);
+  assert.equal(ratio20.minRunTokens, 5);
+});
+
+test("counts only contiguous copied runs of at least minRunTokens toward the matched ratio", () => {
+  // Isolated overlap of common Vietnamese function words is not verbatim copying.
+  const draft = "và zqa của zqb là zqc cho zqd một zqe được zqf";
+  const scattered = compareCopyright(draft, [{
+    ...capture,
+    content: "một bài viết và nội dung của tác giả là bản tin cho bạn đọc được phát hành",
+  }]);
+  assert.equal(scattered.longestConsecutiveWords, 1);
+  assert.equal(scattered.matchedDraftWords, 0);
+  assert.deepEqual(scattered.qualifyingRunLengths, []);
+  assert.equal(scattered.violatedByMatchedDraftRatio, false);
+
+  // A copied fragment of exactly minRunTokens counts; one token shorter does not.
+  const fragment = "alpha beta gamma delta epsilon";
+  const tuned = { consecutiveWords: 50, matchedDraftRatio: 0.2, minRunTokens: 5 };
+  const copied = compareCopyright(`zq1 zq2 ${fragment} zq3 zq4 zq5`, [{ ...capture, content: `x ${fragment} y` }], tuned);
+  assert.equal(copied.matchedDraftWords, 5);
+  assert.deepEqual(copied.qualifyingRunLengths, [5]);
+
+  const shorter = compareCopyright(`zq1 zq2 alpha beta gamma delta zq3 zq4 zq5`, [{ ...capture, content: "x alpha beta gamma delta y" }], tuned);
+  assert.equal(shorter.longestConsecutiveWords, 4);
+  assert.equal(shorter.matchedDraftWords, 0);
+  assert.deepEqual(shorter.qualifyingRunLengths, []);
 });
