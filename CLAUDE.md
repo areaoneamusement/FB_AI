@@ -17,6 +17,8 @@ chạy được ngay:
 | Đóng gói context repo | `npm run context` (repomix → `repomix-output.xml`) |
 
 Không có linter riêng — `npm run typecheck` (tsc strict, ESM) đóng vai trò đó.
+CI (`.github/workflows/ci.yml`) chạy đúng `npm ci` → `npm run typecheck` → `npm test` trên mọi PR,
+nên chạy được ở máy nghĩa là chạy được trên CI.
 
 ## Spec là nguồn sự thật
 
