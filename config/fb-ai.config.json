@@ -1,0 +1,114 @@
+{
+  "language": "vi",
+  "sources": [
+    {
+      "id": "github-llm",
+      "type": "GitHub",
+      "url": "https://api.github.com/search/repositories?q=topic:llm+stars:>500&sort=updated&order=desc",
+      "active": true,
+      "priority": 100,
+      "filterMode": "High"
+    },
+    {
+      "id": "github-ai-agents",
+      "type": "GitHub",
+      "url": "https://api.github.com/search/repositories?q=topic:ai-agents+stars:>300&sort=updated&order=desc",
+      "active": true,
+      "priority": 90,
+      "filterMode": "High"
+    },
+    {
+      "id": "huggingface-blog",
+      "type": "Website",
+      "url": "https://huggingface.co/blog/feed.xml",
+      "active": true,
+      "priority": 80,
+      "filterMode": "All"
+    },
+    {
+      "id": "google-ai-blog",
+      "type": "Website",
+      "url": "https://blog.google/technology/ai/rss/",
+      "active": true,
+      "priority": 75,
+      "filterMode": "All"
+    },
+    {
+      "id": "vnexpress-so-hoa",
+      "type": "Website",
+      "url": "https://vnexpress.net/rss/so-hoa.rss",
+      "active": false,
+      "priority": 60,
+      "filterMode": "All"
+    }
+  ],
+  "collection": {
+    "windowHours": 48,
+    "maxRetries": 2,
+    "perRequestTimeoutMs": 20000
+  },
+  "scoring": {
+    "version": "score-v1",
+    "minScore": 60,
+    "freshnessHorizonHours": 168,
+    "authorityStarTarget": 20000,
+    "relevanceKeywords": [
+      "ai",
+      "llm",
+      "agent",
+      "model",
+      "machine learning",
+      "neural",
+      "transformer",
+      "rag",
+      "prompt",
+      "inference",
+      "fine-tune",
+      "open source"
+    ]
+  },
+  "categories": {
+    "allowed": ["AI Tools", "AI News", "AI Research", "AI Tutorial"],
+    "keywords": {
+      "AI Tools": ["tool", "cli", "sdk", "library", "framework", "plugin", "app"],
+      "AI News": ["release", "launch", "announce", "update", "version", "ra mắt"],
+      "AI Research": ["paper", "benchmark", "research", "arxiv", "evaluation", "study"],
+      "AI Tutorial": ["guide", "tutorial", "how to", "getting started", "hướng dẫn"]
+    },
+    "fallback": "AI News"
+  },
+  "rendering": {
+    "rendererVersion": "renderer-v1",
+    "platforms": ["Facebook_Page", "YouTube"]
+  },
+  "compliance": {
+    "evaluatorVersion": "compliance-v1",
+    "ruleSetVersion": "rules-v1",
+    "bannedKeywords": [
+      "cam kết lợi nhuận",
+      "đảm bảo 100%",
+      "kiếm tiền không cần làm gì",
+      "thuốc chữa bách bệnh",
+      "đầu tư sinh lời chắc chắn"
+    ],
+    "termsVersion": "terms-v1",
+    "attributionRequiredSourceIds": [
+      "github-llm",
+      "github-ai-agents",
+      "huggingface-blog",
+      "google-ai-blog"
+    ]
+  },
+  "research": {
+    "minItems": 2,
+    "perSourceTimeoutMs": 20000,
+    "overallDeadlineMs": 120000
+  },
+  "generation": {
+    "deadlineMs": 300000
+  },
+  "verification": {
+    "maxRounds": 2,
+    "deadlineMs": 300000
+  }
+}

@@ -21,3 +21,8 @@ Tài liệu đặc tả nằm trong `.kiro/specs/fb-ai/`:
 
 Repo đã cấu hình sẵn để mọi phiên Claude Code (local hoặc trên web) chạy được ngay: xem `CLAUDE.md`
 và `docs/claude-setup.md`.
+
+## Chạy thật
+
+Hướng dẫn go-live (biến môi trường, cấu hình nguồn, chạy chu kỳ, đọc kết quả, giới hạn):
+`docs/golive.md`.

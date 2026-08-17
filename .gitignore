@@ -3,3 +3,7 @@ node_modules/
 dist/
 *.log
 repomix-output.*
+
+# Local runtime state and secrets
+data/
+.env

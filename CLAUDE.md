@@ -14,6 +14,9 @@ chạy được ngay:
 | Chỉ vitest | `npm run test:vitest` |
 | Test UI dashboard | `npm run test:ui` |
 | Dev dashboard | `npm run dev:dashboard` |
+| Build SPA | `npm run build` (→ `dist/dashboard`) |
+| Chạy một chu kỳ sinh bài | `npm run cycle` (cần `.env`) |
+| Mở bảng duyệt | `npm start` (cần `.env`) |
 | Đóng gói context repo | `npm run context` (repomix → `repomix-output.xml`) |
 
 Không có linter riêng — `npm run typecheck` (tsc strict, ESM) đóng vai trò đó.
@@ -49,6 +52,22 @@ source-collector → topic-scorer → research-aggregator → content-generator
 - `src/dashboard/` — API + SPA React 19 (`web/`).
 - `src/output/` — `copy-ready-exporter.ts` và `phase2-output-seam.ts`.
 - `src/app/mvp-composition-root.ts` — nơi duy nhất ráp nối các thành phần thật.
+
+Lớp chạy thật (adapter + entrypoint):
+
+- `src/adapters/http-source-fetcher.ts` — GitHub search API + RSS/Atom, có kiểm tra robots.txt
+  và cursor bền (page cho GitHub, ETag/Last-Modified cho feed).
+- `src/adapters/anthropic-model-client.ts` — Model A (Claude): sinh nội dung và sửa theo
+  phản hồi kiểm chứng. Trả JSON theo schema, không parse văn xuôi.
+- `src/adapters/gemini-model-client.ts` — Model B (Gemini): chỉ phán quyết Pass/Contradiction/
+  Unsupported theo research. Khác nhà cung cấp với Model A là có chủ đích.
+- `src/app/bootstrap.ts` — ráp adapter thật từ biến môi trường; dùng chung cho server và CLI.
+- `src/app/server.ts` (`npm start`) — bảng duyệt. `src/app/run-cycle.ts` (`npm run cycle`) —
+  một chu kỳ sinh bài. Tách tiến trình để chu kỳ model không chặn người đang duyệt.
+- `src/app/operator-auth.ts` — bearer token + CSRF ký HMAC. Một operator, không phải hệ
+  thống tài khoản.
+- `config/fb-ai.config.json` + `src/app/runtime-config.ts` — nguồn, trọng số chấm điểm,
+  phân loại, luật tuân thủ. Xem `docs/golive.md`.
 
 ## Quy ước cần giữ
 
