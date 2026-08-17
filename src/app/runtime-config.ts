@@ -60,6 +60,8 @@ export interface RuntimeFileConfig {
     readonly perSourceTimeoutMs?: number;
     readonly overallDeadlineMs?: number;
   };
+  /** Topics carried past scoring per cycle; see `MvpPipelineConfiguration.maxTopicsPerCycle`. */
+  readonly maxTopicsPerCycle?: number;
   readonly verification?: {
     readonly maxRounds?: number;
     readonly deadlineMs?: number;
@@ -142,6 +144,7 @@ export function validateRuntimeConfig(value: unknown, path = "config"): RuntimeF
     throw new ConfigError(`${path}.rendering.platforms phải có ít nhất một nền tảng`);
   }
   assertResearchBounds(config, path);
+  assertTopicBudget(config, path);
   return config;
 }
 
@@ -150,6 +153,16 @@ export function validateRuntimeConfig(value: unknown, path = "config"): RuntimeF
  * a cycle — after collection has already run. Checking here means a bad value is reported
  * at startup, naming the file and the limit.
  */
+function assertTopicBudget(config: RuntimeFileConfig, path: string): void {
+  const value = config.maxTopicsPerCycle;
+  if (value === undefined) return;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new ConfigError(
+      `${path}.maxTopicsPerCycle phải là số nguyên từ 1 trở lên (đang là ${value})`,
+    );
+  }
+}
+
 function assertResearchBounds(config: RuntimeFileConfig, path: string): void {
   const bounds: readonly [keyof NonNullable<RuntimeFileConfig["research"]>, number][] = [
     ["perSourceTimeoutMs", RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS],
@@ -198,6 +211,9 @@ export function buildCompositionConfig(inputs: CompositionInputs): MvpCompositio
       valuesFor: (item) => scoreItem(item, file, now()),
     },
     ...(file.research === undefined ? {} : { research: file.research }),
+    ...(file.maxTopicsPerCycle === undefined
+      ? {}
+      : { maxTopicsPerCycle: file.maxTopicsPerCycle }),
     generation: {
       requestedModel: inputs.modelA,
       language: file.language,

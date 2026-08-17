@@ -81,6 +81,14 @@ export interface MvpPipelineConfiguration {
     readonly perSourceTimeoutMs?: number;
     readonly overallDeadlineMs?: number;
   };
+  /**
+   * Topics carried past scoring in one cycle. Everything downstream of scoring costs
+   * real quota — research re-fetches every source per topic, then two model providers
+   * run per topic — so a busy collection would otherwise spend the whole rate limit on
+   * whatever happened to clear the threshold. Topics are ranked first, so the cap keeps
+   * the best ones; the rest are reported as Deferred and return on a later cycle.
+   */
+  readonly maxTopicsPerCycle?: number;
   readonly generation: {
     readonly requestedModel: Parameters<ContentGenerator["generate"]>[0]["requestedModel"];
     readonly language?: string;
@@ -129,6 +137,7 @@ export interface MvpExternalAdapters {
 export type MvpItemOutcome =
   | { readonly kind: "PendingReview"; readonly run: PipelineRun }
   | { readonly kind: "BelowThreshold"; readonly topic: Topic }
+  | { readonly kind: "Deferred"; readonly topic: Topic }
   | { readonly kind: "InsufficientResearch"; readonly run: PipelineRun; readonly research: ResearchResult }
   | { readonly kind: "GenerationFailed"; readonly run: PipelineRun; readonly generation: ContentGenerationResult }
   | { readonly kind: "VerificationBlocked"; readonly run: PipelineRun; readonly report: VerificationReport }
@@ -138,6 +147,13 @@ export type MvpItemOutcome =
       readonly verification: Extract<VerificationResult, { readonly kind: "RetryableBlocked" }>;
     }
   | { readonly kind: "ComplianceFailed"; readonly run: PipelineRun; readonly results: readonly ArtifactComplianceResult[] };
+
+/**
+ * Default per-cycle topic budget. Three topics cost roughly three research sweeps and six
+ * model calls — enough to keep the review queue fed, small enough to stay inside the free
+ * GitHub rate limit and to make a first live run cheap.
+ */
+export const DEFAULT_MAX_TOPICS_PER_CYCLE = 3;
 
 export interface MvpCycleOutcome {
   readonly collection: CollectionResult;
@@ -194,9 +210,36 @@ export class MvpContentPipeline extends ContentPipeline {
       now,
     );
     const items: MvpItemOutcome[] = [];
+    const eligible: { readonly item: CollectedSourceItem; readonly topic: Topic }[] = [];
+
     for (const item of collection.items) {
-      items.push(await this.processItem(item));
+      const topic = this.scoreTopic(item);
+      if (
+        topic.score.total === null ||
+        topic.score.total < this.configuration.scoring.minScore
+      ) {
+        items.push({ kind: "BelowThreshold", topic });
+        continue;
+      }
+      eligible.push({ item, topic });
     }
+
+    // Highest score first, newest first on a tie — the same order the review queue uses.
+    eligible.sort(
+      (left, right) =>
+        (right.topic.score.total ?? 0) - (left.topic.score.total ?? 0) ||
+        Date.parse(right.item.collectedAt) - Date.parse(left.item.collectedAt),
+    );
+
+    const budget = this.configuration.maxTopicsPerCycle ?? DEFAULT_MAX_TOPICS_PER_CYCLE;
+    for (const [index, { item, topic }] of eligible.entries()) {
+      if (index >= budget) {
+        items.push({ kind: "Deferred", topic });
+        continue;
+      }
+      items.push(await this.processScoredTopic(item, topic));
+    }
+
     return Object.freeze({ collection, items: Object.freeze(items) });
   }
 
@@ -208,6 +251,14 @@ export class MvpContentPipeline extends ContentPipeline {
     ) {
       return { kind: "BelowThreshold", topic };
     }
+    return this.processScoredTopic(item, topic);
+  }
+
+  /** Everything after scoring, for a topic already known to clear the threshold. */
+  private async processScoredTopic(
+    item: CollectedSourceItem,
+    topic: Topic,
+  ): Promise<MvpItemOutcome> {
     let run = await this.start({
       pipelineRunId: `run-${topic.id}`,
       topic,

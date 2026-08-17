@@ -67,6 +67,7 @@ export function summarize(outcome: MvpCycleOutcome): CycleReport {
 const OUTCOME_LABELS: Readonly<Record<MvpItemOutcome["kind"], string>> = {
   PendingReview: "chờ duyệt",
   BelowThreshold: "dưới ngưỡng điểm",
+  Deferred: "để dành chu kỳ sau (vượt hạn mức mỗi chu kỳ)",
   InsufficientResearch: "không đủ research",
   GenerationFailed: "sinh nội dung lỗi",
   VerificationBlocked: "kiểm chứng chặn",

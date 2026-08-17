@@ -216,6 +216,17 @@ describe("validateRuntimeConfig", () => {
     ).toThrow(/overallDeadlineMs/);
   });
 
+  it("rejects a topic budget that is not a positive integer", () => {
+    for (const maxTopicsPerCycle of [0, -1, 2.5]) {
+      expect(() => validateRuntimeConfig({ ...baseConfig, maxTopicsPerCycle })).toThrow(
+        /maxTopicsPerCycle/,
+      );
+    }
+    expect(() =>
+      validateRuntimeConfig({ ...baseConfig, maxTopicsPerCycle: 1 }),
+    ).not.toThrow();
+  });
+
   it("accepts research timeouts at the ceiling", () => {
     expect(() =>
       validateRuntimeConfig({

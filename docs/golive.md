@@ -98,6 +98,7 @@ Chạy định kỳ thì cắm vào cron:
 | `chờ duyệt` | Qua hết kiểm chứng và tuân thủ | Vào bảng duyệt, đọc, sửa nếu cần, bấm duyệt |
 | `dưới ngưỡng điểm` | Chủ đề không đủ điểm | Bình thường. Nếu *mọi* mục đều vậy thì hạ `minScore` |
 | `không đủ research` | Không gom đủ dữ liệu để viết có căn cứ | Thêm nguồn, hoặc hạ `research.minItems` |
+| `để dành chu kỳ sau (vượt hạn mức mỗi chu kỳ)` | Vượt `maxTopicsPerCycle` | Bình thường. Chủ đề điểm cao đi trước, phần còn lại quay lại ở chu kỳ sau |
 | `kiểm chứng chặn` | Gemini thấy câu khẳng định không có căn cứ | **Đây là hệ thống đang làm đúng việc.** Bài bịa số liệu bị chặn tại đây |
 | `vi phạm tiêu chuẩn/bản quyền` | Trùng từ cấm, thiếu ghi nguồn, hoặc copy quá nhiều | Kiểm tra `bannedKeywords` và phần trích dẫn |
 
@@ -111,8 +112,11 @@ với hash cụ thể — nội dung bạn copy đúng là nội dung bạn đã
 - **Một operator.** Xác thực là một token dùng chung, không phải hệ thống tài khoản. Nhiều
   người dùng thuộc Phase 2 (Req 11, lưu credential mã hoá).
 - **SQLite một file.** `data/fb-ai.sqlite` là toàn bộ trạng thái. Sao lưu file này.
-- **Chi phí.** Mỗi chu kỳ gọi Claude 1 lần/bài (+1 lần cho mỗi vòng sửa) và Gemini 1 lần/vòng
-  kiểm chứng. Chạy thử với ít nguồn trước khi bật hết.
+- **Chi phí bị chặn bởi `maxTopicsPerCycle`** (mặc định 3). Mỗi chủ đề qua ngưỡng điểm sẽ
+  gom research (fetch lại *mọi* nguồn) rồi gọi Claude 1 lần/bài (+1 cho mỗi vòng sửa) và
+  Gemini 1 lần/vòng kiểm chứng. Không có hạn mức này thì một chu kỳ thu 200 mục sẽ bắn 200
+  lượt research và 400 lượt gọi model. Chủ đề được xếp hạng theo điểm nên phần bị hoãn quay
+  lại ở chu kỳ sau, không mất.
 - **Chưa chạy được với model thật trong môi trường phát triển.** Container tạo ra thay đổi
   này chặn mọi host ngoài GitHub, nên đường đi tới API Anthropic/Gemini và tới các feed RSS
   chỉ được kiểm bằng adapter giả lập, chưa gọi thật. Lần chạy đầu ở máy bạn là lần đầu tiên
@@ -124,7 +128,7 @@ với hash cụ thể — nội dung bạn copy đúng là nội dung bạn đã
 | --- | --- |
 | `Thiếu biến môi trường bắt buộc: X` | Chưa nạp `.env`. Dùng `node --env-file=.env` hoặc export tay |
 | `Operator token phải dài ít nhất 16 ký tự` | Token quá ngắn |
-| `GitHub search failed with 403` | Hết quota. Đặt `GITHUB_TOKEN` |
+| `GitHub search failed with 403` | Hết quota. Đặt `GITHUB_TOKEN` (60 → 5.000 request/giờ), và giảm `maxTopicsPerCycle` |
 | `Model A bị cắt ở max_tokens` | Bài quá dài. Tăng `maxTokens` trong `AnthropicModelAClient` |
 | `Model B trả về nội dung rỗng` | Sai `GEMINI_MODEL`, hoặc key không có quyền |
 | `Blocked by robots.txt` | Nguồn không cho đọc. Bỏ nguồn đó ra khỏi config |
