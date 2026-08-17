@@ -16,6 +16,15 @@ export interface CycleReport {
   readonly errors: number;
   readonly outcomes: Readonly<Record<string, number>>;
   readonly pendingRunIds: readonly string[];
+  /** Why each source was skipped or failed — without these a zero-item cycle is unactionable. */
+  readonly skippedReasons: readonly SourceProblem[];
+  readonly errorReasons: readonly SourceProblem[];
+}
+
+export interface SourceProblem {
+  readonly sourceId: string;
+  readonly reason: string;
+  readonly attempts?: number;
 }
 
 export async function runCycle(env: ServerEnvironment = process.env): Promise<CycleReport> {
@@ -42,6 +51,15 @@ export function summarize(outcome: MvpCycleOutcome): CycleReport {
     errors: outcome.collection.errors.length,
     outcomes,
     pendingRunIds,
+    skippedReasons: outcome.collection.skipped.map((record) => ({
+      sourceId: record.sourceId,
+      reason: record.reason,
+    })),
+    errorReasons: outcome.collection.errors.map((record) => ({
+      sourceId: record.sourceId,
+      reason: record.reason,
+      attempts: record.attempts,
+    })),
   };
 }
 
@@ -60,6 +78,13 @@ export function formatReport(report: CycleReport): string {
   const lines = [
     `Thu thập: ${report.collected} mục (bỏ qua ${report.skipped}, lỗi ${report.errors})`,
   ];
+  for (const problem of report.skippedReasons) {
+    lines.push(`  bỏ qua ${problem.sourceId}: ${problem.reason}`);
+  }
+  for (const problem of report.errorReasons) {
+    const attempts = problem.attempts === undefined ? "" : ` (đã thử ${problem.attempts} lần)`;
+    lines.push(`  LỖI ${problem.sourceId}${attempts}: ${problem.reason}`);
+  }
   for (const [kind, count] of Object.entries(report.outcomes)) {
     const label = OUTCOME_LABELS[kind as MvpItemOutcome["kind"]] ?? kind;
     lines.push(`  ${label}: ${count}`);
