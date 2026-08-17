@@ -6,4 +6,9 @@ repomix-output.*
 
 # Local runtime state and secrets
 data/
+# Every .env variant, including editor backups (.env.save, .env.bak, .env~)
 .env
+.env.*
+*.env
+.env~
+!.env.example
