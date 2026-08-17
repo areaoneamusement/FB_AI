@@ -68,18 +68,54 @@
     ]
   },
   "categories": {
-    "allowed": ["AI Tools", "AI News", "AI Research", "AI Tutorial"],
+    "allowed": [
+      "AI Tools",
+      "AI News",
+      "AI Research",
+      "AI Tutorial"
+    ],
     "keywords": {
-      "AI Tools": ["tool", "cli", "sdk", "library", "framework", "plugin", "app"],
-      "AI News": ["release", "launch", "announce", "update", "version", "ra mắt"],
-      "AI Research": ["paper", "benchmark", "research", "arxiv", "evaluation", "study"],
-      "AI Tutorial": ["guide", "tutorial", "how to", "getting started", "hướng dẫn"]
+      "AI Tools": [
+        "tool",
+        "cli",
+        "sdk",
+        "library",
+        "framework",
+        "plugin",
+        "app"
+      ],
+      "AI News": [
+        "release",
+        "launch",
+        "announce",
+        "update",
+        "version",
+        "ra mắt"
+      ],
+      "AI Research": [
+        "paper",
+        "benchmark",
+        "research",
+        "arxiv",
+        "evaluation",
+        "study"
+      ],
+      "AI Tutorial": [
+        "guide",
+        "tutorial",
+        "how to",
+        "getting started",
+        "hướng dẫn"
+      ]
     },
     "fallback": "AI News"
   },
   "rendering": {
     "rendererVersion": "renderer-v1",
-    "platforms": ["Facebook_Page", "YouTube"]
+    "platforms": [
+      "Facebook_Page",
+      "YouTube"
+    ]
   },
   "compliance": {
     "evaluatorVersion": "compliance-v1",
@@ -101,8 +137,8 @@
   },
   "research": {
     "minItems": 2,
-    "perSourceTimeoutMs": 20000,
-    "overallDeadlineMs": 120000
+    "perSourceTimeoutMs": 15000,
+    "overallDeadlineMs": 60000
   },
   "generation": {
     "deadlineMs": 300000

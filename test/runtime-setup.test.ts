@@ -1,9 +1,12 @@
+import { readFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import { createOperatorAuth } from "../src/app/operator-auth.js";
 import {
   ConfigError,
+  RESEARCH_OVERALL_DEADLINE_MAX_MS,
+  RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS,
   buildCompositionConfig,
   categorize,
   resolveCompliance,
@@ -19,6 +22,7 @@ import type {
   ResearchResult,
 } from "../src/domain/content.js";
 import type { SourceReference } from "../src/domain/source.js";
+import { DEFAULT_RESEARCH_AGGREGATION_OPTIONS } from "../src/pipeline/research-aggregator.js";
 import type { CollectedSourceItem } from "../src/pipeline/source-collector.js";
 
 const NOW = new Date("2026-08-17T00:00:00.000Z");
@@ -194,6 +198,59 @@ describe("validateRuntimeConfig", () => {
     expect(() =>
       validateRuntimeConfig({ ...baseConfig, rendering: { rendererVersion: "v1", platforms: [] } }),
     ).toThrow(/platforms/);
+  });
+
+  it("rejects research timeouts above what ResearchAggregator accepts", () => {
+    expect(() =>
+      validateRuntimeConfig({
+        ...baseConfig,
+        research: { perSourceTimeoutMs: RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS + 1 },
+      }),
+    ).toThrow(/perSourceTimeoutMs/);
+
+    expect(() =>
+      validateRuntimeConfig({
+        ...baseConfig,
+        research: { overallDeadlineMs: RESEARCH_OVERALL_DEADLINE_MAX_MS + 1 },
+      }),
+    ).toThrow(/overallDeadlineMs/);
+  });
+
+  it("accepts research timeouts at the ceiling", () => {
+    expect(() =>
+      validateRuntimeConfig({
+        ...baseConfig,
+        research: {
+          perSourceTimeoutMs: RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS,
+          overallDeadlineMs: RESEARCH_OVERALL_DEADLINE_MAX_MS,
+        },
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("the shipped config file", () => {
+  it("passes validation", async () => {
+    // The first live run failed because config/fb-ai.config.json set research timeouts
+    // above ResearchAggregator's ceiling. Nothing checked the shipped file until then.
+    const raw = await readFile(
+      new URL("../config/fb-ai.config.json", import.meta.url),
+      "utf8",
+    );
+    expect(() => validateRuntimeConfig(JSON.parse(raw), "config/fb-ai.config.json")).not.toThrow();
+  });
+});
+
+describe("research ceilings", () => {
+  it("match the values ResearchAggregator enforces", () => {
+    // These are duplicated so the config can be rejected at startup rather than mid-cycle.
+    // If the aggregator's limits move, this fails instead of drifting silently.
+    expect(RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS).toBe(
+      DEFAULT_RESEARCH_AGGREGATION_OPTIONS.perSourceTimeoutMs,
+    );
+    expect(RESEARCH_OVERALL_DEADLINE_MAX_MS).toBe(
+      DEFAULT_RESEARCH_AGGREGATION_OPTIONS.overallDeadlineMs,
+    );
   });
 });
 

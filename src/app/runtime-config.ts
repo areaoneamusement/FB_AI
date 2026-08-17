@@ -70,6 +70,14 @@ export interface RuntimeFileConfig {
   };
 }
 
+/**
+ * Mirrors the ceilings `ResearchAggregator` enforces. They live there as defaults that
+ * double as maxima; duplicated here so the config can be rejected before a cycle starts.
+ * `test/runtime-setup.test.ts` asserts the two stay in step.
+ */
+export const RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS = 15_000;
+export const RESEARCH_OVERALL_DEADLINE_MAX_MS = 60_000;
+
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -133,7 +141,29 @@ export function validateRuntimeConfig(value: unknown, path = "config"): RuntimeF
   if (config.rendering === undefined || config.rendering.platforms.length === 0) {
     throw new ConfigError(`${path}.rendering.platforms phải có ít nhất một nền tảng`);
   }
+  assertResearchBounds(config, path);
   return config;
+}
+
+/**
+ * `ResearchAggregator` caps these to keep collection loops bounded, and it throws deep in
+ * a cycle — after collection has already run. Checking here means a bad value is reported
+ * at startup, naming the file and the limit.
+ */
+function assertResearchBounds(config: RuntimeFileConfig, path: string): void {
+  const bounds: readonly [keyof NonNullable<RuntimeFileConfig["research"]>, number][] = [
+    ["perSourceTimeoutMs", RESEARCH_PER_SOURCE_TIMEOUT_MAX_MS],
+    ["overallDeadlineMs", RESEARCH_OVERALL_DEADLINE_MAX_MS],
+  ];
+  for (const [field, maximum] of bounds) {
+    const value = config.research?.[field];
+    if (value === undefined) continue;
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+      throw new ConfigError(
+        `${path}.research.${field} phải là số nguyên từ 1 đến ${maximum} (đang là ${value})`,
+      );
+    }
+  }
 }
 
 export interface CompositionInputs {
