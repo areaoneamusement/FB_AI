@@ -34,11 +34,19 @@ export interface HttpSourceFetcherOptions {
   readonly timeoutMs?: number;
   /** Maximum items returned per page. */
   readonly pageSize?: number;
+  /**
+   * Pages to walk per source per cycle. The collector keeps following `nextCursor` until
+   * a page says stop, and GitHub search allows 1,000 results — without a cap the first
+   * run walks the whole result set and exhausts the rate limit. Stopping early is safe:
+   * the cursor records the newest item seen, so the next cycle resumes from there.
+   */
+  readonly maxPagesPerCycle?: number;
 }
 
 const DEFAULT_USER_AGENT = "FB_AI/0.1 (+https://github.com/areaoneamusement/FB_AI)";
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_PAGE_SIZE = 30;
+const DEFAULT_MAX_PAGES_PER_CYCLE = 3;
 const TERMS_VERSION = "http-source-fetcher-2026-08";
 
 /** Minimum stars a GitHub repository needs before it is worth scoring. */
@@ -84,6 +92,7 @@ export class HttpSourceFetcher implements SourceFetcher {
   private readonly userAgent: string;
   private readonly timeoutMs: number;
   private readonly pageSize: number;
+  private readonly maxPagesPerCycle: number;
   private readonly robotsCache = new Map<string, Promise<RobotsSnapshot>>();
 
   constructor(private readonly options: HttpSourceFetcherOptions = {}) {
@@ -92,6 +101,7 @@ export class HttpSourceFetcher implements SourceFetcher {
     this.userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
+    this.maxPagesPerCycle = options.maxPagesPerCycle ?? DEFAULT_MAX_PAGES_PER_CYCLE;
   }
 
   async isAllowed(source: SourceConfig): Promise<SourcePermission> {
@@ -209,8 +219,10 @@ export class HttpSourceFetcher implements SourceFetcher {
       });
     }
 
-    // Stop when the page was short, or when we caught up with the previous run.
-    const exhausted = reachedKnownItems || repositories.length < this.pageSize;
+    // Stop when the page was short, when we caught up with the previous run, or when
+    // this cycle has walked as many pages as it is allowed to.
+    const exhausted =
+      reachedKnownItems || repositories.length < this.pageSize || page >= this.maxPagesPerCycle;
     if (exhausted) {
       return {
         items,

@@ -174,6 +174,31 @@ describe("HttpSourceFetcher GitHub", () => {
     expect(calls.at(-1)?.searchParams.get("page")).toBe("1");
   });
 
+  it("stops paging once the per-cycle page cap is reached", async () => {
+    // The collector follows nextCursor until a page says stop. GitHub search allows 1,000
+    // results, so without this cap the first run walks the whole set and gets rate-limited.
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/robots.txt") return new Response("", { status: 200 });
+      return jsonResponse({ items: [repository({ id: 1 }), repository({ id: 2 })] });
+    }) as unknown as typeof globalThis.fetch;
+
+    const fetcher = new HttpSourceFetcher({
+      fetch: fetchImpl,
+      now: () => NOW,
+      pageSize: 2,
+      maxPagesPerCycle: 2,
+    });
+
+    const first = await fetcher.fetch(githubSource, undefined, new AbortController().signal);
+    expect(first.nextCursor?.cursor).toBe("2");
+
+    const second = await fetcher.fetch(githubSource, first.nextCursor, new AbortController().signal);
+    // Cap reached: reset to page 1 and remember how far we got instead of walking on.
+    expect(second.nextCursor?.cursor).toBe("1");
+    expect(second.nextCursor?.lastModified).toBe("2026-08-16T00:00:00Z");
+  });
+
   it("resets to page 1 and records a high-water mark once the page is short", async () => {
     const { fetcher } = fetcherWith(() => jsonResponse({ items: [repository()] }));
     const page = await fetcher.fetch(githubSource, undefined, new AbortController().signal);
