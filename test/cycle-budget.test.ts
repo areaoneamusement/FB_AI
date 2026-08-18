@@ -65,6 +65,7 @@ interface Harness {
   readonly app: MvpApplication;
   /** How many topics actually reached Model A — the cost the budget is there to bound. */
   readonly generateCalls: () => number;
+  readonly fetcher: FakeSourceFetcher;
 }
 
 function createHarness(maxTopicsPerCycle: number | undefined): Harness {
@@ -184,7 +185,7 @@ function createHarness(maxTopicsPerCycle: number | undefined): Harness {
     modelACorrection,
     modelB,
   });
-  return { app, generateCalls: () => generateCalls };
+  return { app, generateCalls: () => generateCalls, fetcher };
 }
 
 function rankOf(item: CollectedSourceItem): number {
@@ -221,6 +222,22 @@ describe("per-cycle topic budget", () => {
       const deferred = cycle.items.filter((item) => item.kind === "Deferred");
       expect(deferred.map((item) => (item as { topic: { score: { total: number } } }).topic.score.total))
         .toEqual([89, 85, 81]);
+    } finally {
+      app.close();
+    }
+  });
+
+  it("fetches each source once per cycle, not once per topic", async () => {
+    // Research runs per topic and always walks a source from the start, so three topics
+    // used to re-download identical pages three times. That amplification is what tripped
+    // GitHub's secondary rate limit and Hugging Face's 429 during the live runs.
+    const { app, fetcher } = createHarness(3);
+    try {
+      await app.pipeline.runCycle();
+      // One fetch for collection, one shared by all three topics' research. Before the
+      // memo it was four: collection plus one re-download per topic.
+      const calls = fetcher.fetchCalls.filter((call) => call.source.id === source.id);
+      expect(calls).toHaveLength(2);
     } finally {
       app.close();
     }

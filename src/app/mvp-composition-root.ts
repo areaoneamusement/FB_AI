@@ -44,6 +44,7 @@ import {
   type ContentPipelineOptions,
 } from "../pipeline/content-pipeline.js";
 import { PlatformArtifactRenderer } from "../pipeline/platform-artifact-renderer.js";
+import { MemoizingSourceFetcher } from "../adapters/memoizing-source-fetcher.js";
 import { ResearchAggregator } from "../pipeline/research-aggregator.js";
 import {
   VerificationEngine,
@@ -184,6 +185,8 @@ interface MvpProcessors {
   readonly collector: SourceCollector;
   readonly scorer: TopicScorer;
   readonly researchAggregator: ResearchAggregator;
+  /** Cleared at the start of every cycle so pages never carry over between runs. */
+  readonly researchFetcher: MemoizingSourceFetcher;
   readonly generator: ContentGenerator;
   readonly verification: VerificationEngine;
   readonly renderer: PlatformArtifactRenderer;
@@ -205,6 +208,7 @@ export class MvpContentPipeline extends ContentPipeline {
   }
 
   public async runCycle(now = this.clock()): Promise<MvpCycleOutcome> {
+    this.processors.researchFetcher.reset();
     const collection = await this.processors.collector.runCycle(
       this.configuration.collection,
       now,
@@ -552,7 +556,10 @@ export function createMvpApplication(
     const registry = new SourceRegistry(config.sources);
     const collector = new SourceCollector(registry, adapters.sourceFetcher, collectionState);
     const scorer = new TopicScorer(config.scoring.config);
-    const researchAggregator = new ResearchAggregator(adapters.sourceFetcher, {
+    // Research alone is memoised. The collector must keep talking to the live fetcher:
+    // its cursors advance and its dedup decides what is new, neither of which survives a cache.
+    const researchFetcher = new MemoizingSourceFetcher(adapters.sourceFetcher);
+    const researchAggregator = new ResearchAggregator(researchFetcher, {
       now: config.now,
     });
     const generator = new ContentGenerator(adapters.modelA, { now: config.now });
@@ -575,6 +582,7 @@ export function createMvpApplication(
       collector,
       scorer,
       researchAggregator,
+      researchFetcher,
       generator,
       verification,
       renderer,

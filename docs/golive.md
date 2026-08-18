@@ -128,7 +128,9 @@ với hash cụ thể — nội dung bạn copy đúng là nội dung bạn đã
 | --- | --- |
 | `Thiếu biến môi trường bắt buộc: X` | Chưa nạp `.env`. Dùng `node --env-file=.env` hoặc export tay |
 | `Operator token phải dài ít nhất 16 ký tự` | Token quá ngắn |
-| `GitHub search failed with 403` | Hết quota. Đặt `GITHUB_TOKEN` (60 → 5.000 request/giờ), và giảm `maxTopicsPerCycle` |
+| `GitHub search failed with 403 rate limit exceeded` | Hết quota giờ. Đặt `GITHUB_TOKEN` |
+| `GitHub search failed with 403 Forbidden` | Giới hạn phụ (secondary rate limit) do bắn quá nhanh. Đợi 10–60 phút, đừng chạy lại liên tục |
+| `Feed fetch failed with 429` | Nguồn đang chặn tạm vì bị gọi quá dày. Đợi rồi chạy lại; giảm `maxTopicsPerCycle` nếu lặp lại |
 | `Model A bị cắt ở max_tokens` | Bài quá dài. Tăng `maxTokens` trong `AnthropicModelAClient` |
 | `Model B trả về nội dung rỗng` | Sai `GEMINI_MODEL`, hoặc key không có quyền |
 | `Blocked by robots.txt` | Nguồn không cho đọc. Bỏ nguồn đó ra khỏi config |
