@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   HttpSourceFetcher,
   SourceFetchError,
+  describeFailure,
   isPathAllowed,
   parseFeed,
   parseRobots,
@@ -235,6 +236,40 @@ describe("HttpSourceFetcher GitHub", () => {
       fetcher.fetch(githubSource, undefined, new AbortController().signal),
     ).rejects.toBeInstanceOf(SourceFetchError);
   });
+
+  it("carries GitHub's own explanation into the error", async () => {
+    // A live run stalled for an hour on three identical `403 Forbidden` lines. GitHub
+    // answers a secondary rate limit, a blocked User-Agent and a bad query the same way;
+    // only the body tells them apart.
+    const { fetcher } = fetcherWith(
+      () =>
+        new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), {
+          status: 403,
+          headers: { "retry-after": "60", "x-ratelimit-remaining": "0" },
+        }),
+    );
+
+    await expect(
+      fetcher.fetch(githubSource, undefined, new AbortController().signal),
+    ).rejects.toThrow(/secondary rate limit.*|.*retry-after: 60/);
+  });
+
+  it("sends the default User-Agent when the configured one is blank", async () => {
+    // An empty FB_AI_USER_AGENT in .env used to reach the wire verbatim; Hugging Face
+    // answers a blank User-Agent with 403.
+    let seen: Record<string, string> = {};
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/robots.txt") return new Response("", { status: 200 });
+      seen = (init?.headers ?? {}) as Record<string, string>;
+      return jsonResponse({ items: [] });
+    }) as unknown as typeof globalThis.fetch;
+
+    const fetcher = new HttpSourceFetcher({ fetch: fetchImpl, now: () => NOW, userAgent: "  " });
+    await fetcher.fetch(githubSource, undefined, new AbortController().signal);
+
+    expect(seen["user-agent"]).toMatch(/FB_AI/);
+  });
 });
 
 describe("HttpSourceFetcher feeds", () => {
@@ -286,6 +321,31 @@ describe("HttpSourceFetcher feeds", () => {
     await expect(
       fetcher.fetch(feedSource, undefined, new AbortController().signal),
     ).rejects.toBeInstanceOf(SourceFetchError);
+  });
+});
+
+describe("describeFailure", () => {
+  it("prefers the JSON message and names the wait", async () => {
+    const text = await describeFailure(
+      new Response(JSON.stringify({ message: "Rate limit exceeded" }), {
+        status: 403,
+        headers: { "retry-after": "120" },
+      }),
+    );
+    expect(text).toContain("403");
+    expect(text).toContain("retry-after: 120");
+    expect(text).toContain("Rate limit exceeded");
+  });
+
+  it("falls back to a bounded snippet when the body is not JSON", async () => {
+    const text = await describeFailure(new Response("x".repeat(400), { status: 500 }));
+    expect(text).toContain("500");
+    expect(text.length).toBeLessThan(300);
+  });
+
+  it("says only what it knows when the body is empty", async () => {
+    const text = await describeFailure(new Response(null, { status: 404 }));
+    expect(text).toContain("404");
   });
 });
 

@@ -75,6 +75,60 @@ interface FeedEntry {
   readonly publishedAt?: string;
 }
 
+/**
+ * Status and status text alone are not actionable: GitHub answers a secondary rate limit,
+ * a blocked User-Agent and a bad query all with `403 Forbidden`, and puts the difference in
+ * the body. A live run stalled for an hour on three identical `403 Forbidden` lines that
+ * carried no way to tell those apart. `Retry-After` is included because it says how long to
+ * wait, which is usually the only decision left to make.
+ */
+export async function describeFailure(response: Response): Promise<string> {
+  const parts = [`${response.status} ${response.statusText}`.trim()];
+
+  const retryAfter = response.headers.get("retry-after");
+  if (retryAfter !== null) parts.push(`retry-after: ${retryAfter}`);
+
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  const reset = response.headers.get("x-ratelimit-reset");
+  if (remaining !== null) {
+    const resetsAt = reset === null ? "" : `, reset ${formatEpochSeconds(reset)}`;
+    parts.push(`quota còn ${remaining}${resetsAt}`);
+  }
+
+  const detail = await readFailureBody(response);
+  if (detail !== undefined) parts.push(detail);
+
+  return parts.join(" | ");
+}
+
+/** Never lets diagnostics become the reason a cycle fails. */
+async function readFailureBody(response: Response): Promise<string | undefined> {
+  try {
+    const raw = (await response.text()).trim();
+    if (raw.length === 0) return undefined;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === "object" && parsed !== null && "message" in parsed) {
+        const { message } = parsed as { message: unknown };
+        if (typeof message === "string" && message.trim().length > 0) {
+          return message.trim();
+        }
+      }
+    } catch {
+      // Not JSON; fall through to the raw snippet.
+    }
+    return `${raw.slice(0, 200).replace(/\s+/g, " ")}${raw.length > 200 ? "…" : ""}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatEpochSeconds(value: string): string {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return value;
+  return new Date(seconds * 1_000).toISOString();
+}
+
 export class SourceFetchError extends Error {
   constructor(
     readonly sourceId: string,
@@ -98,7 +152,8 @@ export class HttpSourceFetcher implements SourceFetcher {
   constructor(private readonly options: HttpSourceFetcherOptions = {}) {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.now = options.now ?? (() => new Date());
-    this.userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
+    // A blank User-Agent is worse than none: Hugging Face answers it with 403.
+    this.userAgent = options.userAgent?.trim() || DEFAULT_USER_AGENT;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
     this.maxPagesPerCycle = options.maxPagesPerCycle ?? DEFAULT_MAX_PAGES_PER_CYCLE;
@@ -174,7 +229,7 @@ export class HttpSourceFetcher implements SourceFetcher {
     if (!response.ok) {
       throw new SourceFetchError(
         source.id,
-        `GitHub search failed with ${response.status} ${response.statusText}`,
+        `GitHub search failed with ${await describeFailure(response)}`,
         response.status,
       );
     }
@@ -274,7 +329,7 @@ export class HttpSourceFetcher implements SourceFetcher {
     if (!response.ok) {
       throw new SourceFetchError(
         source.id,
-        `Feed fetch failed with ${response.status} ${response.statusText}`,
+        `Feed fetch failed with ${await describeFailure(response)}`,
         response.status,
       );
     }

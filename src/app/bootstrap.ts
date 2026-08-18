@@ -49,16 +49,18 @@ export const DEFAULTS = {
 } as const;
 
 export async function bootstrap(env: ServerEnvironment): Promise<BootstrappedApplication> {
-  const configPath = resolve(env.FB_AI_CONFIG ?? DEFAULTS.configPath);
-  const sqlitePath = resolve(env.FB_AI_DB ?? DEFAULTS.sqlitePath);
-  const staticDirectory = resolve(env.FB_AI_STATIC_DIR ?? DEFAULTS.staticDirectory);
+  const configPath = resolve(optionalEnv(env, "FB_AI_CONFIG") ?? DEFAULTS.configPath);
+  const sqlitePath = resolve(optionalEnv(env, "FB_AI_DB") ?? DEFAULTS.sqlitePath);
+  const staticDirectory = resolve(
+    optionalEnv(env, "FB_AI_STATIC_DIR") ?? DEFAULTS.staticDirectory,
+  );
 
   const operatorToken = requireEnv(env, "FB_AI_OPERATOR_TOKEN");
   const anthropicApiKey = requireEnv(env, "ANTHROPIC_API_KEY");
   const geminiApiKey = requireEnv(env, "GEMINI_API_KEY");
 
-  const modelAName = env.ANTHROPIC_MODEL ?? DEFAULT_MODEL_A;
-  const modelBName = env.GEMINI_MODEL ?? DEFAULT_MODEL_B;
+  const modelAName = optionalEnv(env, "ANTHROPIC_MODEL") ?? DEFAULT_MODEL_A;
+  const modelBName = optionalEnv(env, "GEMINI_MODEL") ?? DEFAULT_MODEL_B;
 
   const file = await loadRuntimeConfig(configPath);
 
@@ -68,13 +70,13 @@ export async function bootstrap(env: ServerEnvironment): Promise<BootstrappedApp
   const modelA = new AnthropicModelAClient({ apiKey: anthropicApiKey, model: modelAName });
   const modelB = new GeminiModelBClient({ apiKey: geminiApiKey, model: modelBName });
   const sourceFetcher = new HttpSourceFetcher({
-    ...(env.GITHUB_TOKEN === undefined ? {} : { githubToken: env.GITHUB_TOKEN }),
-    ...(env.FB_AI_USER_AGENT === undefined ? {} : { userAgent: env.FB_AI_USER_AGENT }),
+    ...optional("githubToken", optionalEnv(env, "GITHUB_TOKEN")),
+    ...optional("userAgent", optionalEnv(env, "FB_AI_USER_AGENT")),
   });
 
   const auth = createOperatorAuth({
     token: operatorToken,
-    ...(env.FB_AI_CSRF_SECRET === undefined ? {} : { csrfSecret: env.FB_AI_CSRF_SECRET }),
+    ...optional("csrfSecret", optionalEnv(env, "FB_AI_CSRF_SECRET")),
   });
 
   const app = createMvpApplication(
@@ -101,8 +103,8 @@ export async function bootstrap(env: ServerEnvironment): Promise<BootstrappedApp
 
   return {
     app,
-    host: env.FB_AI_HOST ?? DEFAULTS.host,
-    port: parsePort(env.FB_AI_PORT),
+    host: optionalEnv(env, "FB_AI_HOST") ?? DEFAULTS.host,
+    port: parsePort(optionalEnv(env, "FB_AI_PORT")),
     sqlitePath,
     modelA: modelAName,
     modelB: modelBName,
@@ -116,6 +118,25 @@ function metadataFor(
   configurationVersion: string,
 ): ReproducibilityMetadata {
   return { provider, model, promptVersion, configurationVersion };
+}
+
+/**
+ * Reads an optional variable, treating blank as absent.
+ *
+ * `.env.example` lists every optional key with an empty value, so a copied `.env` exports
+ * `ANTHROPIC_MODEL=""`, `FB_AI_USER_AGENT=""` and the rest. Under `??` an empty string is a
+ * real value, which sent an empty User-Agent to every source and would have called the
+ * Anthropic API with an empty model name the moment research first succeeded.
+ */
+export function optionalEnv(env: ServerEnvironment, name: string): string | undefined {
+  const value = env[name];
+  if (value === undefined || value.trim().length === 0) return undefined;
+  return value.trim();
+}
+
+/** Spreads a key only when it has a value, for `exactOptionalPropertyTypes`. */
+function optional<K extends string, V>(key: K, value: V | undefined): Partial<Record<K, V>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
 }
 
 export function requireEnv(env: ServerEnvironment, name: string): string {
