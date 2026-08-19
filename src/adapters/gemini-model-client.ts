@@ -242,34 +242,84 @@ export function parseFindings(
     if (typeof finding.claimId === "string") byClaimId.set(finding.claimId, finding);
   }
 
+  // Everything the model was shown. An Unsupported finding cites this: design.md says
+  // "Contradiction/unsupported findings include evidence and explanation", and the honest
+  // evidence for "the research does not support this" is the research that was consulted.
+  const corpus = corpusEvidence(evidenceIndex);
+
+  // A claim the model never addressed is a model failure, not a verdict. Inventing an
+  // Unsupported for it would make an empty answer look like a considered judgement and
+  // quietly defeat VerificationEngine's coverage guarantee, which is what catches a model
+  // that has stopped answering.
+  const uncovered = claims.filter(({ id }) => !byClaimId.has(id));
+  if (uncovered.length > 0) {
+    throw new ModelResponseError(
+      `Model B không trả phán quyết cho ${uncovered.length}/${claims.length} claim`,
+    );
+  }
+
   return claims.map((claim) => {
     const raw = byClaimId.get(claim.id);
-    const verdict = toVerdict(raw?.verdict);
-    const evidenceRefs =
-      verdict === "Unsupported" ? [] : resolveEvidence(raw?.evidence, evidenceIndex);
+    const cited = resolveEvidence(raw?.evidence, evidenceIndex);
 
     // A Pass with no traceable evidence is not a pass — the design requires every
     // supported claim to point at a capture.
-    const effectiveVerdict: Verdict =
-      verdict !== "Unsupported" && evidenceRefs.length === 0 ? "Unsupported" : verdict;
+    const verdict: Verdict =
+      toVerdict(raw?.verdict) !== "Unsupported" && cited.length === 0
+        ? "Unsupported"
+        : toVerdict(raw?.verdict);
 
-    const description =
-      typeof raw?.description === "string" && raw.description.length > 0
-        ? raw.description
-        : raw === undefined
-          ? "Model B không trả phán quyết cho claim này"
-          : undefined;
-
-    const confidence = typeof raw?.confidence === "number" ? clamp01(raw.confidence) : undefined;
+    // Never empty: VerificationEngine rejects a finding that cites nothing, and it is right
+    // to. An earlier version blanked the refs for Unsupported, which made that verdict
+    // impossible to deliver — every cycle failed three attempts deep as InvalidModelResponse.
+    const evidenceRefs = cited.length > 0 ? cited : corpus;
 
     return {
       claimId: claim.id,
-      verdict: effectiveVerdict,
+      verdict,
       evidenceRefs,
-      ...(description === undefined ? {} : { description }),
-      ...(confidence === undefined ? {} : { confidence }),
+      ...describe(raw as RawFinding, verdict, cited.length),
+      ...(typeof raw?.confidence === "number" ? { confidence: clamp01(raw.confidence) } : {}),
     };
   });
+}
+
+/**
+ * Every non-Pass verdict needs an explanation the engine will accept, including the ones
+ * this adapter assigns itself rather than reading from the model.
+ */
+function describe(
+  raw: RawFinding,
+  verdict: Verdict,
+  citedCount: number,
+): { description?: string } {
+  const given = typeof raw?.description === "string" ? raw.description.trim() : "";
+  if (given.length > 0) return { description: given };
+  if (verdict === "Unsupported" && citedCount === 0) {
+    return {
+      description: "Model B không chỉ ra được dẫn chứng nào trong research cho claim này",
+    };
+  }
+  if (verdict !== "Pass") {
+    return { description: `Model B trả phán quyết ${verdict} nhưng không kèm giải thích` };
+  }
+  return {};
+}
+
+/** Distinct references across the whole research corpus, in the order shown to the model. */
+function corpusEvidence(
+  evidenceIndex: ReadonlyMap<number, readonly SourceReference[]>,
+): readonly SourceReference[] {
+  const refs: SourceReference[] = [];
+  const seen = new Set<string>();
+  for (const references of evidenceIndex.values()) {
+    for (const reference of references) {
+      if (seen.has(reference.captureId)) continue;
+      seen.add(reference.captureId);
+      refs.push(reference);
+    }
+  }
+  return refs;
 }
 
 function toVerdict(value: unknown): Verdict {

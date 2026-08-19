@@ -263,31 +263,71 @@ describe("parseFindings", () => {
     expect(findings[1]!.evidenceRefs).toEqual([secondRef]);
   });
 
-  it("returns Unsupported for a claim the model skipped", () => {
-    const findings = parseFindings(
-      JSON.stringify({ findings: [{ claimId: "claim-1", verdict: "Pass", evidence: [1] }] }),
-      claims,
-      evidenceIndex,
-    );
-    expect(findings.map((finding) => finding.claimId)).toEqual(["claim-1", "claim-2"]);
-    expect(findings[1]!.verdict).toBe("Unsupported");
-    expect(findings[1]!.description).toContain("không trả phán quyết");
+  /** Judges one claim, so a case about verdicts is not also a case about coverage. */
+  const oneClaim = claims.slice(0, 1);
+
+  it("rejects an answer that skips a claim instead of inventing a verdict for it", () => {
+    // Filling the gap with Unsupported would make a model that stopped answering look like
+    // one that judged every claim, and would defeat the engine's coverage guarantee.
+    expect(() =>
+      parseFindings(
+        JSON.stringify({ findings: [{ claimId: "claim-1", verdict: "Pass", evidence: [1] }] }),
+        claims,
+        evidenceIndex,
+      ),
+    ).toThrow(/1\/2 claim/);
   });
 
-  it("downgrades a Pass that cites no traceable evidence", () => {
+  it("downgrades a Pass that cites no traceable evidence, and still cites the corpus", () => {
+    // This used to return no evidence at all, which VerificationEngine rejects — rightly:
+    // design.md requires "Contradiction/unsupported findings include evidence and
+    // explanation". The result was that Unsupported could not be delivered: every cycle
+    // failed three attempts deep as InvalidModelResponse, blamed on the model.
     const findings = parseFindings(
       JSON.stringify({ findings: [{ claimId: "claim-1", verdict: "Pass", evidence: [] }] }),
-      claims,
+      oneClaim,
       evidenceIndex,
     );
     expect(findings[0]!.verdict).toBe("Unsupported");
-    expect(findings[0]!.evidenceRefs).toEqual([]);
+    expect(findings[0]!.evidenceRefs.length).toBeGreaterThan(0);
+    expect(findings[0]!.description).not.toHaveLength(0);
+  });
+
+  it("gives every finding evidence and a reason the engine will accept", () => {
+    // Whatever the model answers, the finding has to be deliverable.
+    for (const raw of [
+      { claimId: "claim-1", verdict: "Pass", evidence: [] },
+      { claimId: "claim-1", verdict: "Unsupported", evidence: [] },
+      { claimId: "claim-1", verdict: "Contradiction", evidence: [] },
+      { claimId: "claim-1", verdict: "nonsense", evidence: [99] },
+    ]) {
+      const finding = parseFindings(
+        JSON.stringify({ findings: [raw] }),
+        oneClaim,
+        evidenceIndex,
+      )[0]!;
+      expect(finding.evidenceRefs.length).toBeGreaterThan(0);
+      if (finding.verdict !== "Pass") expect(finding.description ?? "").not.toHaveLength(0);
+    }
+  });
+
+  it("keeps the model's own explanation when it gave one", () => {
+    const findings = parseFindings(
+      JSON.stringify({
+        findings: [
+          { claimId: "claim-1", verdict: "Unsupported", evidence: [], description: "Research không nhắc tới con số này" },
+        ],
+      }),
+      oneClaim,
+      evidenceIndex,
+    );
+    expect(findings[0]!.description).toBe("Research không nhắc tới con số này");
   });
 
   it("ignores evidence indices that do not exist", () => {
     const findings = parseFindings(
       JSON.stringify({ findings: [{ claimId: "claim-1", verdict: "Pass", evidence: [99] }] }),
-      claims,
+      oneClaim,
       evidenceIndex,
     );
     expect(findings[0]!.verdict).toBe("Unsupported");
@@ -298,7 +338,7 @@ describe("parseFindings", () => {
       JSON.stringify({
         findings: [{ claimId: "claim-1", verdict: "Pass", evidence: [1], confidence: 7 }],
       }),
-      claims,
+      oneClaim,
       evidenceIndex,
     );
     expect(findings[0]!.confidence).toBe(1);
