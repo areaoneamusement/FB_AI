@@ -17,6 +17,7 @@ chạy được ngay:
 | Build SPA | `npm run build` (→ `dist/dashboard`) |
 | Chạy một chu kỳ sinh bài | `npm run cycle` (cần `.env`) |
 | Mở bảng duyệt | `npm start` (cần `.env`) |
+| Kiểm tra quota & nguồn | `npm run doctor` (cần `.env`) |
 | Đóng gói context repo | `npm run context` (repomix → `repomix-output.xml`) |
 
 Không có linter riêng — `npm run typecheck` (tsc strict, ESM) đóng vai trò đó.

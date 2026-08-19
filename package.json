@@ -11,6 +11,7 @@
     "dev:dashboard": "vite",
     "start": "tsx --env-file-if-exists=.env src/app/server.ts",
     "cycle": "tsx --env-file-if-exists=.env src/app/run-cycle.ts",
+    "doctor": "tsx --env-file-if-exists=.env src/app/doctor.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:vitest && npm run test:node",
     "test:vitest": "vitest run",

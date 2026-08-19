@@ -91,6 +91,23 @@ Chạy định kỳ thì cắm vào cron:
 0 7,19 * * *  cd /đường/dẫn/FB_AI && npm run cycle >> logs/cycle.log 2>&1
 ```
 
+## 4b. Kiểm tra trước khi chạy: `npm run doctor`
+
+```bash
+npm run doctor
+```
+
+Đọc thẳng trạng thái thật mà không chạy chu kỳ: quota GitHub còn bao nhiêu và reset lúc
+nào, rồi **một** request tới từng nguồn đang bật. Không ghi con trỏ, không gọi model,
+không tốn tiền.
+
+`core` và `search` là **hai ngân sách riêng**. Search chỉ 30 request/phút (10 nếu không có
+token) và reset theo phút; core là 5.000/giờ. Một lần chạy hỏng vì `search` sẽ không giải
+thích được bằng con số `core`, nên hãy đọc đúng dòng.
+
+Cần **ít nhất 2 nguồn** báo `OK` thì research mới đủ dữ liệu để viết bài — lệnh này nói
+thẳng khi chưa đủ.
+
 ## 5. Đọc kết quả
 
 | Kết quả | Nghĩa là | Nên làm gì |
