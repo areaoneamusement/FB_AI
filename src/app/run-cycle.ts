@@ -24,7 +24,18 @@ export interface CycleReport {
    * and until this was printed the budget could only be estimated — badly.
    */
   readonly requestsBySource: Readonly<Record<string, number>>;
+  /**
+   * Why items stopped where they did, grouped by outcome.
+   *
+   * The counts alone read like a verdict when they are only a tally: three runs were spent
+   * on `kiểm chứng chặn (có thể thử lại): 3` without knowing whether Model B timed out,
+   * returned something unparseable, or was never reached.
+   */
+  readonly outcomeDetails: Readonly<Record<string, readonly string[]>>;
 }
+
+/** Reasons kept per outcome kind. Enough to see a pattern, not enough to bury the report. */
+export const MAX_DETAILS_PER_OUTCOME = 3;
 
 export interface SourceProblem {
   readonly sourceId: string;
@@ -49,10 +60,17 @@ export function summarize(
 ): CycleReport {
   const outcomes: Record<string, number> = {};
   const pendingRunIds: string[] = [];
+  const outcomeDetails: Record<string, string[]> = {};
 
   for (const item of outcome.items) {
     outcomes[item.kind] = (outcomes[item.kind] ?? 0) + 1;
     if (item.kind === "PendingReview") pendingRunIds.push(item.run.id);
+
+    const detail = describeOutcome(item);
+    if (detail !== undefined) {
+      const kept = (outcomeDetails[item.kind] ??= []);
+      if (kept.length < MAX_DETAILS_PER_OUTCOME && !kept.includes(detail)) kept.push(detail);
+    }
   }
 
   return {
@@ -71,7 +89,40 @@ export function summarize(
       attempts: record.attempts,
     })),
     requestsBySource: Object.fromEntries(requests),
+    outcomeDetails,
   };
+}
+
+/** Pulls the one sentence that says why, out of whichever shape the outcome carries. */
+export function describeOutcome(item: MvpItemOutcome): string | undefined {
+  switch (item.kind) {
+    case "VerificationRetryableBlocked": {
+      const { error } = item.verification;
+      return `${error.dependency} ${error.code}: ${error.reason}`;
+    }
+    case "VerificationBlocked": {
+      const failing = item.report.findings.filter(({ verdict }) => verdict !== "Pass");
+      const first = failing[0];
+      if (first === undefined) return undefined;
+      return `${failing.length} claim không đạt, ví dụ ${first.verdict}: ${first.description ?? first.claimId}`;
+    }
+    case "GenerationFailed": {
+      if (item.generation.kind !== "Failed") return undefined;
+      const first = item.generation.errors[0];
+      const where = first === undefined ? "" : ` (${first.path}: ${first.message})`;
+      return `${item.generation.failureKind}${where}`;
+    }
+    case "ComplianceFailed": {
+      const failing = item.results.filter((result) => !result.passed);
+      const first = failing[0];
+      if (first === undefined) return undefined;
+      return `${failing.length} artifact vi phạm, ví dụ ${first.platform}`;
+    }
+    case "InsufficientResearch":
+      return item.research.reason;
+    default:
+      return undefined;
+  }
 }
 
 /** Human-readable labels for the reasons an item did not reach review. */
@@ -100,6 +151,9 @@ export function formatReport(report: CycleReport): string {
   for (const [kind, count] of Object.entries(report.outcomes)) {
     const label = OUTCOME_LABELS[kind as MvpItemOutcome["kind"]] ?? kind;
     lines.push(`  ${label}: ${count}`);
+    for (const detail of report.outcomeDetails[kind] ?? []) {
+      lines.push(`    ${detail}`);
+    }
   }
   const requests = Object.entries(report.requestsBySource);
   if (requests.length > 0) {
