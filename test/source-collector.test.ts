@@ -194,6 +194,61 @@ describe("SourceCollector", () => {
     expect(state.cursors.get("github")).toEqual(nextCursor);
   });
 
+  it("does not retry a rate-limit refusal", async () => {
+    // Each retry spends the very budget the source is waiting to give back, and cannot
+    // succeed before the window resets. A live run halved its own GitHub search allowance
+    // by fetching every page twice: once to fail, once to fail again milliseconds later.
+    const now = new Date("2025-02-01T12:00:00.000Z");
+    let attempts = 0;
+    const fetcher: SourceFetcher = {
+      async isAllowed() {
+        return allowed;
+      },
+      async fetch() {
+        attempts += 1;
+        throw Object.assign(new Error("API rate limit exceeded"), { status: 403 });
+      },
+    };
+    const collector = new SourceCollector(
+      new SourceRegistry([source("limited", "GitHub", "Best", 10)]),
+      fetcher,
+      new MemoryCollectionState(),
+    );
+
+    const result = await collector.runCycle({ maxRetries: 3, baseRetryDelayMs: 0 }, now);
+
+    expect(attempts).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({
+        sourceId: "limited",
+        attempts: 1,
+        reason: expect.stringContaining("rate limit"),
+      }),
+    ]);
+  });
+
+  it("still retries a failure that is not a rate limit", async () => {
+    const now = new Date("2025-02-01T12:00:00.000Z");
+    let attempts = 0;
+    const fetcher: SourceFetcher = {
+      async isAllowed() {
+        return allowed;
+      },
+      async fetch() {
+        attempts += 1;
+        throw Object.assign(new Error("gateway timeout"), { status: 504 });
+      },
+    };
+    const collector = new SourceCollector(
+      new SourceRegistry([source("flaky", "GitHub", "Best", 10)]),
+      fetcher,
+      new MemoryCollectionState(),
+    );
+
+    await collector.runCycle({ maxRetries: 3, baseRetryDelayMs: 0 }, now);
+    expect(attempts).toBe(3);
+  });
+
   it("records terms skips and source failures without dropping successful items", async () => {
     const now = new Date("2025-02-01T12:00:00.000Z");
     const attempts = new Map<string, number>();

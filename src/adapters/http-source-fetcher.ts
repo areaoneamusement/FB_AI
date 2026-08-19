@@ -82,6 +82,20 @@ interface FeedEntry {
  * carried no way to tell those apart. `Retry-After` is included because it says how long to
  * wait, which is usually the only decision left to make.
  */
+/**
+ * Requests left before the source starts refusing. One is kept in reserve so a later step
+ * in the same cycle — research fetching the same source — is not the call that trips it.
+ */
+export const QUOTA_RESERVE = 1;
+
+/** Reads `x-ratelimit-remaining`; absent or unparseable means no reason to slow down. */
+export function isQuotaNearlySpent(response: Response): boolean {
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  if (remaining === null) return false;
+  const left = Number(remaining);
+  return Number.isFinite(left) && left <= QUOTA_RESERVE;
+}
+
 export async function describeFailure(response: Response): Promise<string> {
   const parts = [`${response.status} ${response.statusText}`.trim()];
 
@@ -274,10 +288,15 @@ export class HttpSourceFetcher implements SourceFetcher {
       });
     }
 
-    // Stop when the page was short, when we caught up with the previous run, or when
-    // this cycle has walked as many pages as it is allowed to.
+    // Stop when the page was short, when we caught up with the previous run, when this
+    // cycle has walked as many pages as it is allowed to, or when GitHub says the budget
+    // is nearly gone. That last one is what keeps a cycle from failing itself: the search
+    // API allows 30 requests a minute, and the reply to request 30 already says so.
     const exhausted =
-      reachedKnownItems || repositories.length < this.pageSize || page >= this.maxPagesPerCycle;
+      reachedKnownItems ||
+      repositories.length < this.pageSize ||
+      page >= this.maxPagesPerCycle ||
+      isQuotaNearlySpent(response);
     if (exhausted) {
       return {
         items,

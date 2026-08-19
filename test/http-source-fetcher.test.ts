@@ -200,6 +200,49 @@ describe("HttpSourceFetcher GitHub", () => {
     expect(second.nextCursor?.lastModified).toBe("2026-08-16T00:00:00Z");
   });
 
+  it("stops paging when GitHub says the quota is nearly spent", async () => {
+    // The live failure: `quota còn 0, reset` 16 seconds out. The search API allows 30
+    // requests a minute and the reply to the last usable one already says so, so a cycle
+    // that ignores the header spends its own budget and then fails on the next page.
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/robots.txt") return new Response("", { status: 200 });
+      return new Response(
+        JSON.stringify({ items: [repository({ id: 1 }), repository({ id: 2 })] }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json", "x-ratelimit-remaining": "1" },
+        },
+      );
+    }) as unknown as typeof globalThis.fetch;
+
+    const fetcher = new HttpSourceFetcher({ fetch: fetchImpl, now: () => NOW, pageSize: 2 });
+    const page = await fetcher.fetch(githubSource, undefined, new AbortController().signal);
+
+    // A full page would normally advance to page 2; the quota header stops it at 1.
+    expect(page.items).toHaveLength(2);
+    expect(page.nextCursor?.cursor).toBe("1");
+    expect(page.nextCursor?.lastModified).toBe("2026-08-16T00:00:00Z");
+  });
+
+  it("keeps paging while quota remains", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/robots.txt") return new Response("", { status: 200 });
+      return new Response(
+        JSON.stringify({ items: [repository({ id: 1 }), repository({ id: 2 })] }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json", "x-ratelimit-remaining": "25" },
+        },
+      );
+    }) as unknown as typeof globalThis.fetch;
+
+    const fetcher = new HttpSourceFetcher({ fetch: fetchImpl, now: () => NOW, pageSize: 2 });
+    const page = await fetcher.fetch(githubSource, undefined, new AbortController().signal);
+    expect(page.nextCursor?.cursor).toBe("2");
+  });
+
   it("resets to page 1 and records a high-water mark once the page is short", async () => {
     const { fetcher } = fetcherWith(() => jsonResponse({ items: [repository()] }));
     const page = await fetcher.fetch(githubSource, undefined, new AbortController().signal);

@@ -28,6 +28,20 @@ import type {
 } from "../domain/source.js";
 
 /** Source adapters must retain and return durable cursors between pages. */
+/**
+ * A refusal the source will keep repeating until its window resets.
+ *
+ * Retrying one is worse than useless: each attempt spends budget the source is waiting to
+ * give back, and it cannot succeed before the reset. A live run halved its own GitHub
+ * search allowance this way — every page was fetched twice, once to fail and once to fail
+ * again a few milliseconds later.
+ */
+export function isRateLimitRefusal(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { status } = error as { status?: unknown };
+  return status === 403 || status === 429;
+}
+
 export interface SourceFetcher {
   fetch(
     source: SourceConfig,
