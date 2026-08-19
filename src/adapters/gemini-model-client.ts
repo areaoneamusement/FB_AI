@@ -40,7 +40,18 @@ export interface GeminiLike {
 }
 
 export const GEMINI_PROVIDER = "google";
-export const DEFAULT_MODEL_B = "gemini-2.5-pro";
+/**
+ * Model B default.
+ *
+ * `gemini-2.5-pro` was the default until Google stopped serving it to new accounts:
+ * `404 ... no longer available to new users. Please update your code to use
+ * models/gemini-3.1-pro-preview`. Every cycle blocked on that, three attempts at a
+ * time, reported only as a retryable verification failure.
+ *
+ * Override with `GEMINI_MODEL` when an account has access to something else;
+ * `npm run doctor` calls this model and prints whatever Google answers.
+ */
+export const DEFAULT_MODEL_B = "gemini-3.1-pro-preview";
 export const CRITIQUE_PROMPT_VERSION = "model-b-critique-v1";
 export const MODEL_B_CONFIGURATION_VERSION = "model-b-config-v1";
 

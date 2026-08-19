@@ -9,6 +9,7 @@ import {
   withDeadline,
 } from "../src/adapters/anthropic-model-client.js";
 import {
+  DEFAULT_MODEL_B,
   GeminiModelBClient,
   buildEvidenceIndex,
   parseFindings,
@@ -397,5 +398,15 @@ describe("GeminiModelBClient", () => {
         control(),
       ),
     ).rejects.toThrow(/rỗng/);
+  });
+});
+
+describe("DEFAULT_MODEL_B", () => {
+  it("is not a model Google has stopped serving to new accounts", () => {
+    // Live failure: `404 ... models/gemini-2.5-pro is no longer available to new users`.
+    // Every cycle blocked on it, three attempts at a time, and reported only as a
+    // retryable verification failure — the default is worth pinning.
+    expect(DEFAULT_MODEL_B).not.toBe("gemini-2.5-pro");
+    expect(DEFAULT_MODEL_B).not.toHaveLength(0);
   });
 });

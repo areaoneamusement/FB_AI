@@ -39,9 +39,10 @@ ANTHROPIC_API_KEY=sk-ant-...
 GEMINI_API_KEY=...
 ```
 
-> `GEMINI_MODEL` mặc định là `gemini-2.5-pro`. Nếu key của bạn không truy cập được model đó,
-> đặt lại bằng tên model bạn thực sự có — sai tên sẽ lỗi ở bước kiểm chứng chứ không phải lúc
-> khởi động.
+> `GEMINI_MODEL` mặc định là `gemini-3.1-pro-preview`. Nếu key của bạn không truy cập được model đó,
+> đặt lại bằng tên model bạn thực sự có. Tên sai **không** báo lỗi lúc khởi động — nó chỉ hiện
+> ra ở bước kiểm chứng, dưới dạng `kiểm chứng chặn (có thể thử lại)`, sau khi đã tốn tiền gọi
+> Claude viết bài. Chạy `npm run doctor` trước để biết chắc.
 
 ## 3. Kiểm tra cấu hình nguồn
 
@@ -116,7 +117,7 @@ vì một chu kỳ đầy đủ chỉ để đọc `kiểm chứng chặn (có t
 ```
 Model:
   OK  Model A (Claude) [claude-opus-5] 12.4s: viết được bài 42 từ
-  OK  Model B (Gemini) [gemini-2.5-pro] 3.1s: phán quyết: Pass
+  OK  Model B (Gemini) [gemini-3.1-pro-preview] 3.1s: phán quyết: Pass
 ```
 
 ## 5. Đọc kết quả
