@@ -1,4 +1,5 @@
 import { bootstrap } from "./bootstrap.js";
+import { summariseProviderError } from "./provider-error.js";
 import type { ServerEnvironment } from "./bootstrap.js";
 import type { MvpCycleOutcome, MvpItemOutcome } from "./mvp-composition-root.js";
 
@@ -98,7 +99,8 @@ export function describeOutcome(item: MvpItemOutcome): string | undefined {
   switch (item.kind) {
     case "VerificationRetryableBlocked": {
       const { error } = item.verification;
-      return `${error.dependency} ${error.code}: ${error.reason}`;
+      // Providers answer with whole JSON documents; three of them buried a whole report.
+      return `${error.dependency} ${error.code}: ${summariseProviderError(error.reason)}`;
     }
     case "VerificationBlocked": {
       const failing = item.report.findings.filter(({ verdict }) => verdict !== "Pass");

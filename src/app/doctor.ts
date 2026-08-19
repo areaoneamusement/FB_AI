@@ -7,6 +7,11 @@ import { DEFAULT_MODEL_B, GeminiModelBClient } from "../adapters/gemini-model-cl
 import { loadRuntimeConfig } from "./runtime-config.js";
 import { DEFAULTS, optionalEnv } from "./bootstrap.js";
 import { diagnoseModelA, diagnoseModelB, type ModelDiagnosis } from "./model-probe.js";
+import {
+  findWorkingGeminiModel,
+  formatGeminiSearch,
+  type GeminiSearchResult,
+} from "./gemini-model-search.js";
 import type { ServerEnvironment } from "./bootstrap.js";
 import type { SourceConfig } from "../domain/source.js";
 
@@ -39,6 +44,11 @@ export interface DoctorReport {
   readonly quotaError?: string;
   readonly sources: readonly SourceDiagnosis[];
   readonly models: readonly ModelDiagnosis[];
+  /**
+   * Only present when Model B failed. Choosing its name from memory has now failed twice —
+   * once retired, once not entitled — so the fallback is to ask the key what it can use.
+   */
+  readonly geminiSearch?: GeminiSearchResult;
 }
 
 /**
@@ -142,7 +152,23 @@ export async function runDoctor(env: ServerEnvironment = process.env): Promise<D
     quotas,
     ...(error === undefined ? {} : { quotaError: error }),
     sources,
-    models: await diagnoseModels(env),
+    ...(await modelSection(env)),
+  };
+}
+
+/** Probes both models, and searches for a usable Gemini only when the configured one failed. */
+async function modelSection(
+  env: ServerEnvironment,
+): Promise<Pick<DoctorReport, "models" | "geminiSearch">> {
+  const models = await diagnoseModels(env);
+  const modelB = models.find(({ label }) => label.startsWith("Model B"));
+  const geminiKey = optionalEnv(env, "GEMINI_API_KEY");
+
+  if (modelB?.ok !== false || geminiKey === undefined) return { models };
+
+  return {
+    models,
+    geminiSearch: await findWorkingGeminiModel(geminiKey, MODEL_PROBE_DEADLINE_MS),
   };
 }
 
@@ -242,6 +268,11 @@ export function formatDoctorReport(report: DoctorReport): string {
     if (report.models.every(({ ok }) => ok)) {
       lines.push("Cả hai model trả lời đúng schema. Bài viết đi được tới bước duyệt.");
     }
+  }
+
+  if (report.geminiSearch !== undefined) {
+    lines.push("");
+    lines.push(formatGeminiSearch(report.geminiSearch));
   }
 
   return lines.join("\n");

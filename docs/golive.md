@@ -117,8 +117,23 @@ vì một chu kỳ đầy đủ chỉ để đọc `kiểm chứng chặn (có t
 ```
 Model:
   OK  Model A (Claude) [claude-opus-5] 12.4s: viết được bài 42 từ
-  OK  Model B (Gemini) [gemini-3.1-pro-preview] 3.1s: phán quyết: Pass
+  OK  Model B (Gemini) [gemini-2.5-flash] 3.1s: phán quyết: Pass
 ```
+
+Nếu Model B lỗi, lệnh tự hỏi key của bạn xem nó dùng được model nào rồi thử lần lượt cho tới
+khi có model trả lời, và in ra đúng dòng cần thêm vào `.env`:
+
+```
+Đang tìm model Gemini mà key của bạn dùng được:
+  LỖI gemini-3.1-pro 0.9s: You exceeded your current quota ... limit: 0
+  OK  gemini-2.5-flash 2.1s: phán quyết: Pass
+
+Dùng được: gemini-2.5-flash
+Thêm dòng này vào .env:  GEMINI_MODEL=gemini-2.5-flash
+```
+
+`limit: 0` **không** có nghĩa là dùng hết quota — nó nghĩa là gói của bạn không được cấp
+model đó. Chờ bao lâu cũng vô ích; phải đổi model hoặc bật thanh toán.
 
 ## 5. Đọc kết quả
 
