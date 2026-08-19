@@ -342,6 +342,28 @@ describe("HttpSourceFetcher feeds", () => {
     expect(page.nextCursor?.etag).toBe('W/"abc"');
   });
 
+  it("fetches a feed once per cycle even when the ETag changes every time", async () => {
+    // A feed hands over every entry in one response. Returning a cursor without saying
+    // "stop" made the collector ask again, and Hugging Face mints a fresh ETag per request,
+    // so no cursor ever repeated and the cycle guard never fired: 128 requests to one feed
+    // in a single cycle, until the server started answering 429.
+    let served = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/robots.txt") return new Response("", { status: 200 });
+      served += 1;
+      return new Response(rss, { status: 200, headers: { etag: `W/"${served}"` } });
+    }) as unknown as typeof globalThis.fetch;
+
+    const fetcher = new HttpSourceFetcher({ fetch: fetchImpl, now: () => NOW });
+    const page = await fetcher.fetch(feedSource, undefined, new AbortController().signal);
+
+    expect(page.exhausted).toBe(true);
+    // The validator still has to survive, or the next cycle re-reads the whole feed.
+    expect(page.nextCursor?.etag).toBe('W/"1"');
+    expect(served).toBe(1);
+  });
+
   it("sends conditional headers and returns nothing on 304", async () => {
     let seen: Record<string, string> = {};
     const { fetcher } = fetcherWith((_url, init) => {

@@ -385,6 +385,12 @@ export class HttpSourceFetcher implements SourceFetcher {
 
     return {
       items,
+      // A feed hands over every entry in one response; there is no page two. The cursor is
+      // a validator for the next cycle, not a pointer to more of this one. Saying otherwise
+      // made the collector ask again, and a feed that mints a fresh ETag per request — Hugging
+      // Face does — never repeats a cursor, so the cycle guard never fired and one cycle
+      // spent 128 requests on a single feed before the server started refusing.
+      exhausted: true,
       nextCursor: {
         sourceId: source.id,
         ...(etag === null ? {} : { etag }),
