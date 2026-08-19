@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { HttpSourceFetcher } from "../src/adapters/http-source-fetcher.js";
 import {
+  diagnoseModels,
   diagnoseSource,
   formatDoctorReport,
   readGitHubQuota,
@@ -158,6 +159,7 @@ describe("formatDoctorReport", () => {
       { sourceId: "github-llm", ok: false, detail: "403 Forbidden" },
       { sourceId: "google-ai-blog", ok: true, detail: "8 mục", items: 8 },
     ],
+    models: [],
   };
 
   it("flags an exhausted budget and names its reset", () => {
@@ -185,5 +187,62 @@ describe("formatDoctorReport", () => {
 
   it("says plainly when there is no token", () => {
     expect(formatDoctorReport({ ...base, tokenPresent: false })).toContain("KHÔNG có");
+  });
+
+  it("names the model that answered and how long it took", () => {
+    // `kiểm chứng chặn (có thể thử lại)` says a dependency failed three times but not
+    // which one, nor why. These two lines are the answer a cycle cannot give.
+    const text = formatDoctorReport({
+      ...base,
+      models: [
+        {
+          label: "Model A (Claude)",
+          model: "claude-opus-5",
+          ok: true,
+          detail: "viết được bài 42 từ",
+          elapsedMs: 12_400,
+        },
+        {
+          label: "Model B (Gemini)",
+          model: "gemini-2.5-pro",
+          ok: false,
+          detail: "Model B trả về nội dung rỗng",
+          elapsedMs: 3_100,
+        },
+      ],
+    });
+    expect(text).toContain("OK  Model A (Claude) [claude-opus-5] 12.4s");
+    expect(text).toContain("LỖI Model B (Gemini) [gemini-2.5-pro] 3.1s: Model B trả về nội dung rỗng");
+    expect(text).not.toContain("Cả hai model trả lời đúng schema");
+  });
+
+  it("confirms the path is clear only when both models answered", () => {
+    const text = formatDoctorReport({
+      ...base,
+      models: [
+        { label: "Model A (Claude)", model: "m", ok: true, detail: "ok", elapsedMs: 1_000 },
+        { label: "Model B (Gemini)", model: "n", ok: true, detail: "ok", elapsedMs: 1_000 },
+      ],
+    });
+    expect(text).toContain("Cả hai model trả lời đúng schema");
+  });
+
+  it("says nothing about models when none were probed", () => {
+    expect(formatDoctorReport(base)).not.toContain("Model:");
+  });
+});
+
+describe("diagnoseModels", () => {
+  it("reports a missing key instead of throwing, so the source report survives", async () => {
+    const results = await diagnoseModels({});
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ ok: false, detail: expect.stringContaining("ANTHROPIC_API_KEY") });
+    expect(results[1]).toMatchObject({ ok: false, detail: expect.stringContaining("GEMINI_API_KEY") });
+  });
+
+  it("falls back to the shipped model names when the env does not set them", async () => {
+    const results = await diagnoseModels({});
+    expect(results[0]?.model).not.toHaveLength(0);
+    expect(results[1]?.model).not.toHaveLength(0);
   });
 });

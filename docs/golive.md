@@ -108,6 +108,17 @@ thích được bằng con số `core`, nên hãy đọc đúng dòng.
 Cần **ít nhất 2 nguồn** báo `OK` thì research mới đủ dữ liệu để viết bài — lệnh này nói
 thẳng khi chưa đủ.
 
+Phần cuối gọi thật **cả hai model** bằng đúng adapter production: một bài ngắn cho Claude,
+một claim cho Gemini. Cùng prompt, cùng schema như lúc chạy chu kỳ, nên lỗi key sai, tên
+model sai hay phản hồi lệch schema đều lộ ra ở đây — mất vài giây và vài trăm đồng, thay
+vì một chu kỳ đầy đủ chỉ để đọc `kiểm chứng chặn (có thể thử lại): 3`.
+
+```
+Model:
+  OK  Model A (Claude) [claude-opus-5] 12.4s: viết được bài 42 từ
+  OK  Model B (Gemini) [gemini-2.5-pro] 3.1s: phán quyết: Pass
+```
+
 ## 5. Đọc kết quả
 
 | Kết quả | Nghĩa là | Nên làm gì |

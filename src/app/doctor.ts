@@ -1,6 +1,12 @@
 import { HttpSourceFetcher } from "../adapters/http-source-fetcher.js";
+import {
+  AnthropicModelAClient,
+  DEFAULT_MODEL_A,
+} from "../adapters/anthropic-model-client.js";
+import { DEFAULT_MODEL_B, GeminiModelBClient } from "../adapters/gemini-model-client.js";
 import { loadRuntimeConfig } from "./runtime-config.js";
 import { DEFAULTS, optionalEnv } from "./bootstrap.js";
+import { diagnoseModelA, diagnoseModelB, type ModelDiagnosis } from "./model-probe.js";
 import type { ServerEnvironment } from "./bootstrap.js";
 import type { SourceConfig } from "../domain/source.js";
 
@@ -32,7 +38,14 @@ export interface DoctorReport {
   readonly quotas: readonly QuotaDiagnosis[];
   readonly quotaError?: string;
   readonly sources: readonly SourceDiagnosis[];
+  readonly models: readonly ModelDiagnosis[];
 }
+
+/**
+ * Deadline for each probe. Shorter than the pipeline's own so a hung provider is reported
+ * rather than waited out, long enough that a slow-but-working one is not called broken.
+ */
+export const MODEL_PROBE_DEADLINE_MS = 90_000;
 
 interface RateLimitPayload {
   readonly resources?: Record<string, { limit: number; remaining: number; reset: number }>;
@@ -129,7 +142,65 @@ export async function runDoctor(env: ServerEnvironment = process.env): Promise<D
     quotas,
     ...(error === undefined ? {} : { quotaError: error }),
     sources,
+    models: await diagnoseModels(env),
   };
+}
+
+/**
+ * Probes both providers with one short request each, through the production adapters.
+ *
+ * A missing key is reported, not thrown: the source half of the report is still worth
+ * having when only the model half is misconfigured.
+ */
+export async function diagnoseModels(env: ServerEnvironment): Promise<readonly ModelDiagnosis[]> {
+  const results: ModelDiagnosis[] = [];
+
+  const anthropicKey = optionalEnv(env, "ANTHROPIC_API_KEY");
+  const modelAName = optionalEnv(env, "ANTHROPIC_MODEL") ?? DEFAULT_MODEL_A;
+  if (anthropicKey === undefined) {
+    results.push({
+      label: "Model A (Claude)",
+      model: modelAName,
+      ok: false,
+      detail: "Thiếu ANTHROPIC_API_KEY trong .env",
+      elapsedMs: 0,
+    });
+  } else {
+    results.push(
+      await diagnoseModelA(
+        new AnthropicModelAClient({ apiKey: anthropicKey, model: modelAName }),
+        modelAName,
+        MODEL_PROBE_DEADLINE_MS,
+      ),
+    );
+  }
+
+  const geminiKey = optionalEnv(env, "GEMINI_API_KEY");
+  const modelBName = optionalEnv(env, "GEMINI_MODEL") ?? DEFAULT_MODEL_B;
+  if (geminiKey === undefined) {
+    results.push({
+      label: "Model B (Gemini)",
+      model: modelBName,
+      ok: false,
+      detail: "Thiếu GEMINI_API_KEY trong .env",
+      elapsedMs: 0,
+    });
+  } else {
+    results.push(
+      await diagnoseModelB(
+        new GeminiModelBClient({ apiKey: geminiKey, model: modelBName }),
+        modelBName,
+        MODEL_PROBE_DEADLINE_MS,
+      ),
+    );
+  }
+
+  return results;
+}
+
+/** Fixed width so the OK and LỖI columns line up when the report is skimmed. */
+function flag(ok: boolean): string {
+  return (ok ? "OK" : "LỖI").padEnd(4);
 }
 
 export function formatDoctorReport(report: DoctorReport): string {
@@ -149,7 +220,7 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push("");
   lines.push("Nguồn:");
   for (const source of report.sources) {
-    lines.push(`  ${source.ok ? "OK  " : "LỖI "} ${source.sourceId}: ${source.detail}`);
+    lines.push(`  ${flag(source.ok)}${source.sourceId}: ${source.detail}`);
   }
 
   const working = report.sources.filter(({ ok }) => ok).length;
@@ -158,6 +229,21 @@ export function formatDoctorReport(report: DoctorReport): string {
   if (working < 2) {
     lines.push("Cần ít nhất 2 nguồn đọc được thì research mới đủ dữ liệu để viết bài.");
   }
+
+  if (report.models.length > 0) {
+    lines.push("");
+    lines.push("Model:");
+    for (const model of report.models) {
+      const seconds = (model.elapsedMs / 1_000).toFixed(1);
+      lines.push(
+        `  ${flag(model.ok)}${model.label} [${model.model}] ${seconds}s: ${model.detail}`,
+      );
+    }
+    if (report.models.every(({ ok }) => ok)) {
+      lines.push("Cả hai model trả lời đúng schema. Bài viết đi được tới bước duyệt.");
+    }
+  }
+
   return lines.join("\n");
 }
 
