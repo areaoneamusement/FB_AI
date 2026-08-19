@@ -1,3 +1,4 @@
+import { isRateLimitRefusal } from "../adapters/ports.js";
 import type { SourceFetcher } from "../adapters/ports.js";
 import type {
   RawItem,
@@ -164,6 +165,7 @@ export class SourceCollector {
       }
 
       await this.state.saveCursor(page.nextCursor);
+      if (page.exhausted === true) return;
       cursor = page.nextCursor;
     }
   }
@@ -202,7 +204,9 @@ async function fetchWithRetries(
   options: ResolvedCollectionOptions,
 ) {
   let lastError: unknown;
+  let spent = 0;
   for (let attempt = 1; attempt <= options.maxRetries; attempt += 1) {
+    spent = attempt;
     try {
       return await fetchWithTimeout(
         fetcher,
@@ -212,16 +216,16 @@ async function fetchWithRetries(
       );
     } catch (error) {
       lastError = error;
+      // Spending another request on a rate limit takes budget from the retry that could
+      // have worked, and cannot succeed before the window resets.
+      if (isRateLimitRefusal(error)) break;
       if (attempt < options.maxRetries) {
         await delay(options.baseRetryDelayMs * 2 ** (attempt - 1));
       }
     }
   }
 
-  throw new FetchAttemptsExhaustedError(
-    options.maxRetries,
-    errorMessage(lastError),
-  );
+  throw new FetchAttemptsExhaustedError(spent, errorMessage(lastError));
 }
 
 async function fetchWithTimeout(

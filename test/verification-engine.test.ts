@@ -148,16 +148,18 @@ describe("extractClaims", () => {
     expect(second).toEqual(first);
     expect(first.map(({ format }) => format)).toEqual([
       "FacebookPost", "FacebookPost",
-      "Guide", "Guide", "Guide",
-      "Guide", "Guide", "Guide",
-      "Guide", "Guide", "Guide",
+      "Guide", "Guide",
+      "Guide", "Guide",
+      "Guide", "Guide",
       "VideoScript", "VideoScript", "VideoScript",
     ]);
+    // Image suggestions are art direction, not assertions a reader can be misled by, so
+    // there is nothing in them for research to support (CR-0003).
     expect(first.map(({ path }) => path)).toEqual([
       "facebookPost", "facebookPost",
-      "guide[0].heading", "guide[0].body", "guide[0].imageSuggestions[0].description",
-      "guide[1].heading", "guide[1].body", "guide[1].imageSuggestions[0].description",
-      "guide[2].heading", "guide[2].body", "guide[2].imageSuggestions[0].description",
+      "guide[0].heading", "guide[0].body",
+      "guide[1].heading", "guide[1].body",
+      "guide[2].heading", "guide[2].body",
       "videoScript.intro", "videoScript.body", "videoScript.conclusion",
     ]);
     expect(new Set(first.map(({ id }) => id)).size).toBe(first.length);
@@ -165,6 +167,47 @@ describe("extractClaims", () => {
     expect(first.every(({ id }) => /^claim-[a-f0-9]{24}$/u.test(id))).toBe(true);
     expect(Object.isFrozen(first)).toBe(true);
     expect(first.every(Object.isFrozen)).toBe(true);
+  });
+
+  it("does not treat a run of hashtags as a claim", () => {
+    // A live draft was blocked on `Đây là các hashtag, không phải thông tin từ research` —
+    // a correct verdict on a span that should never have been a claim (CR-0003).
+    const tagged = {
+      ...revision,
+      content: {
+        ...content,
+        facebookPost: `${content.facebookPost}\n#AI #LLM #TrungCahaAI`,
+      },
+    };
+
+    const texts = extractClaims(tagged).map(({ text }) => text);
+    expect(texts.some((text) => text.startsWith("#"))).toBe(false);
+    // The prose around them is untouched.
+    expect(texts).toContain("Công cụ hỗ trợ tiếng Việt.");
+  });
+
+  it("still claims a sentence that merely mentions a hashtag", () => {
+    // Narrow on purpose: only a span that is nothing but tags is excluded.
+    const mixed = {
+      ...revision,
+      content: { ...content, facebookPost: "Dự án #AI này đạt 1.200 sao." },
+    };
+    const post = extractClaims(mixed).filter(({ path }) => path === "facebookPost");
+    expect(post.map(({ text }) => text)).toEqual(["Dự án #AI này đạt 1.200 sao."]);
+  });
+
+  it("does not split a Vietnamese thousands separator into two claims", () => {
+    // "1.200 sao" used to become "Dự án #AI này đạt 1." and "200 sao." — two fragments,
+    // neither judgeable, both counted against the critique's coverage (CR-0003).
+    const numeric = {
+      ...revision,
+      content: { ...content, facebookPost: "Dự án đạt 1.200 sao. Phiên bản mới nhanh hơn." },
+    };
+    const post = extractClaims(numeric).filter(({ path }) => path === "facebookPost");
+    expect(post.map(({ text }) => text)).toEqual([
+      "Dự án đạt 1.200 sao.",
+      "Phiên bản mới nhanh hơn.",
+    ]);
   });
 });
 

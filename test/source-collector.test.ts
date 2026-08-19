@@ -194,6 +194,103 @@ describe("SourceCollector", () => {
     expect(state.cursors.get("github")).toEqual(nextCursor);
   });
 
+  it("saves an exhausted page's cursor and stops instead of asking for more", async () => {
+    // A fetcher had no way to say "checkpoint this, then stop": omit the cursor and the
+    // high-water mark is lost, return one and the collector asks for another page. The
+    // GitHub fetcher chose the second, spending an extra request per source every cycle.
+    const now = new Date("2025-02-01T12:00:00.000Z");
+    let calls = 0;
+    const state = new MemoryCollectionState();
+    const fetcher: SourceFetcher = {
+      async isAllowed() {
+        return allowed;
+      },
+      async fetch(config) {
+        calls += 1;
+        return {
+          items: [],
+          exhausted: true,
+          nextCursor: {
+            sourceId: config.id,
+            cursor: "1",
+            lastModified: "2025-02-01T00:00:00.000Z",
+            updatedAt: now.toISOString(),
+          },
+        };
+      },
+    };
+    const collector = new SourceCollector(
+      new SourceRegistry([source("paged", "GitHub", "Best", 10)]),
+      fetcher,
+      state,
+    );
+
+    const result = await collector.runCycle({ maxRetries: 1, baseRetryDelayMs: 0 }, now);
+
+    expect(calls).toBe(1);
+    expect(result.errors).toEqual([]);
+    // The checkpoint still has to survive, or the next cycle re-reads the same head.
+    expect(await state.getCursor("paged")).toMatchObject({
+      cursor: "1",
+      lastModified: "2025-02-01T00:00:00.000Z",
+    });
+  });
+
+  it("does not retry a rate-limit refusal", async () => {
+    // Each retry spends the very budget the source is waiting to give back, and cannot
+    // succeed before the window resets. A live run halved its own GitHub search allowance
+    // by fetching every page twice: once to fail, once to fail again milliseconds later.
+    const now = new Date("2025-02-01T12:00:00.000Z");
+    let attempts = 0;
+    const fetcher: SourceFetcher = {
+      async isAllowed() {
+        return allowed;
+      },
+      async fetch() {
+        attempts += 1;
+        throw Object.assign(new Error("API rate limit exceeded"), { status: 403 });
+      },
+    };
+    const collector = new SourceCollector(
+      new SourceRegistry([source("limited", "GitHub", "Best", 10)]),
+      fetcher,
+      new MemoryCollectionState(),
+    );
+
+    const result = await collector.runCycle({ maxRetries: 3, baseRetryDelayMs: 0 }, now);
+
+    expect(attempts).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({
+        sourceId: "limited",
+        attempts: 1,
+        reason: expect.stringContaining("rate limit"),
+      }),
+    ]);
+  });
+
+  it("still retries a failure that is not a rate limit", async () => {
+    const now = new Date("2025-02-01T12:00:00.000Z");
+    let attempts = 0;
+    const fetcher: SourceFetcher = {
+      async isAllowed() {
+        return allowed;
+      },
+      async fetch() {
+        attempts += 1;
+        throw Object.assign(new Error("gateway timeout"), { status: 504 });
+      },
+    };
+    const collector = new SourceCollector(
+      new SourceRegistry([source("flaky", "GitHub", "Best", 10)]),
+      fetcher,
+      new MemoryCollectionState(),
+    );
+
+    await collector.runCycle({ maxRetries: 3, baseRetryDelayMs: 0 }, now);
+    expect(attempts).toBe(3);
+  });
+
   it("records terms skips and source failures without dropping successful items", async () => {
     const now = new Date("2025-02-01T12:00:00.000Z");
     const attempts = new Map<string, number>();

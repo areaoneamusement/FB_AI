@@ -199,13 +199,8 @@ export function extractClaims(revision: DraftRevision): readonly Claim[] {
       { format: "Guide", path: `guide[${index}].heading`, text: section.heading },
       { format: "Guide", path: `guide[${index}].body`, text: section.body },
     );
-    section.imageSuggestions.forEach((suggestion, suggestionIndex) => {
-      fields.push({
-        format: "Guide",
-        path: `guide[${index}].imageSuggestions[${suggestionIndex}].description`,
-        text: suggestion.description,
-      });
-    });
+    // Image suggestions are art direction for whoever produces the image, not assertions
+    // to a reader, so there is nothing in them for research to support (CR-0003).
   });
   fields.push(
     { format: "VideoScript", path: "videoScript.intro", text: revision.content.videoScript.intro },
@@ -214,7 +209,11 @@ export function extractClaims(revision: DraftRevision): readonly Claim[] {
   );
 
   const claims = fields.flatMap((field) =>
-    statementSpans(field.text).map(({ startOffset, endOffset }) => {
+    statementSpans(field.text)
+      .filter(({ startOffset, endOffset }) =>
+        assertsSomething(field.text.slice(startOffset, endOffset)),
+      )
+      .map(({ startOffset, endOffset }) => {
       const text = field.text.slice(startOffset, endOffset);
       return Object.freeze({
         id: claimId(revision.id, field.format, field.path, startOffset, endOffset, text),
@@ -784,6 +783,24 @@ function validateCorrectedContent(content: ContentDraft, parent: DraftRevision):
   assertNonEmptyForModel(content.language, "Corrected content language");
 }
 
+/**
+ * Whether a span can assert anything, and therefore needs research behind it.
+ *
+ * Property 6 covers every *factual* claim. Splitting on sentence terminators alone also
+ * produced spans that assert nothing and can never be grounded — a live draft was blocked
+ * on `Đây là các hashtag, không phải thông tin từ research`, which is a correct verdict on
+ * a span that should never have been a claim (CR-0003).
+ *
+ * Deliberately narrow: only hashtag runs are excluded here. Prose that reads as advice
+ * rather than assertion stays in scope, because judging mood in code is unreliable and
+ * being wrong in that direction lets an invented statement through unverified.
+ */
+function assertsSomething(span: string): boolean {
+  const tokens = span.split(/\s+/u).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  return !tokens.every((token) => token.startsWith("#"));
+}
+
 function statementSpans(text: string): readonly { startOffset: number; endOffset: number }[] {
   if (typeof text !== "string") return [];
   const spans: Array<{ startOffset: number; endOffset: number }> = [];
@@ -792,11 +809,19 @@ function statementSpans(text: string): readonly { startOffset: number; endOffset
     const character = text[index]!;
     if (character === "\r" && text[index + 1] === "\n") index += 1;
     if (!".!?。！？\n\r".includes(character)) continue;
+    // A dot between digits is a Vietnamese thousands separator, not a sentence end.
+    // Splitting there turned "1.200 sao" into two fragments, neither of them judgeable,
+    // and inflated the claim count a critique has to cover (CR-0003).
+    if (character === "." && isDigit(text[index - 1]) && isDigit(text[index + 1])) continue;
     pushTrimmedSpan(text, segmentStart, index + 1, spans);
     segmentStart = index + 1;
   }
   pushTrimmedSpan(text, segmentStart, text.length, spans);
   return spans;
+}
+
+function isDigit(character: string | undefined): boolean {
+  return character !== undefined && character >= "0" && character <= "9";
 }
 
 function pushTrimmedSpan(

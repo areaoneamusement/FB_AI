@@ -292,6 +292,7 @@ export class ResearchAggregator {
           `Cursor source ${page.nextCursor.sourceId} does not match ${source.id}`,
         );
       }
+      if (page.exhausted === true) return items;
       cursor = page.nextCursor;
     }
   }

@@ -16,3 +16,13 @@ Tài liệu đặc tả nằm trong `.kiro/specs/fb-ai/`:
 
 - **Phase 1 (MVP):** thu thập → chấm điểm → research → sinh nội dung → hai model kiểm chứng chéo → kiểm tra tuân thủ → bảng duyệt → xuất nội dung copy-ready để đăng thủ công.
 - **Phase 2 (sau):** tự động xuất bản qua API, tự đăng nhóm, lưu token mã hóa.
+
+## Thiết lập Claude Code
+
+Repo đã cấu hình sẵn để mọi phiên Claude Code (local hoặc trên web) chạy được ngay: xem `CLAUDE.md`
+và `docs/claude-setup.md`.
+
+## Chạy thật
+
+Hướng dẫn go-live (biến môi trường, cấu hình nguồn, chạy chu kỳ, đọc kết quả, giới hạn):
+`docs/golive.md`.

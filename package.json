@@ -9,12 +9,16 @@
   "scripts": {
     "build": "vite build",
     "dev:dashboard": "vite",
+    "start": "tsx --env-file-if-exists=.env src/app/server.ts",
+    "cycle": "tsx --env-file-if-exists=.env src/app/run-cycle.ts",
+    "doctor": "tsx --env-file-if-exists=.env src/app/doctor.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:vitest && npm run test:node",
     "test:vitest": "vitest run",
     "test:ui": "vitest run test/review-dashboard-ui.test.tsx",
     "test:node": "node --import tsx --test test/topic-scorer.test.ts test/compliance-checker.test.ts",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "context": "npx -y repomix@latest"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.1",
@@ -32,7 +36,10 @@
     "vitest": "4.1.10"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
+    "@google/genai": "^2.17.1",
     "better-sqlite3": "11.10.0",
+    "fast-xml-parser": "^5.11.0",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   }

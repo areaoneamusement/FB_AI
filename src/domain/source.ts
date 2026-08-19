@@ -51,4 +51,14 @@ export interface RawItem {
 export interface FetchPage {
   readonly items: readonly RawItem[];
   readonly nextCursor?: SourceCursor;
+  /**
+   * Set when this page is the last one for this cycle, even though `nextCursor` carries a
+   * checkpoint worth saving.
+   *
+   * Without it a fetcher had only two ways to answer, and neither fits: omit the cursor and
+   * lose the high-water mark, or return one and be asked for another page. The GitHub
+   * fetcher takes the second, so every source spent an extra request re-reading page one at
+   * the end of each cycle, and could trip the cursor-cycle guard doing it.
+   */
+  readonly exhausted?: boolean;
 }
