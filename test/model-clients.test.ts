@@ -11,6 +11,8 @@ import {
 import {
   DEFAULT_MODEL_B,
   GeminiModelBClient,
+  MAX_CLAIMS_PER_CRITIQUE,
+  batchClaims,
   buildEvidenceIndex,
   parseFindings,
 } from "../src/adapters/gemini-model-client.js";
@@ -189,6 +191,32 @@ describe("AnthropicModelAClient", () => {
     expect(prompts[0]).toContain("Bản phát hành mới hỗ trợ chạy cục bộ.");
   });
 
+  it("tells the model that every sentence is checked, and to skip un-sourced advice", async () => {
+    // A live draft was blocked on "this is editorial advice" and another on hashtags —
+    // both correct verdicts on sentences the generator should not have written, because
+    // nothing in the research could ever support them (CR-0003).
+    const { client } = anthropicStub({ content: textBlocks(draftJson) });
+    let systemPrompt = "";
+    const spy = {
+      messages: {
+        create: async (params: { system?: string; messages: { content: string }[] }) => {
+          systemPrompt = params.system ?? "";
+          return await (client.messages as unknown as {
+            create: (p: unknown) => Promise<unknown>;
+          }).create(params);
+        },
+      },
+    } as unknown as Pick<Anthropic, "messages">;
+
+    await new AnthropicModelAClient({ client: spy }).generate(
+      { topic, research, inputHash: "hash-1", requestedModel, language: "vi" },
+      control(),
+    );
+
+    expect(systemPrompt).toContain("hashtag");
+    expect(systemPrompt).toContain("lời kêu gọi hành động");
+  });
+
   it("surfaces a refusal instead of returning an empty draft", async () => {
     const { client } = anthropicStub({ content: textBlocks(""), stop_reason: "refusal" });
     const modelA = new AnthropicModelAClient({ client });
@@ -342,6 +370,25 @@ describe("parseFindings", () => {
       evidenceIndex,
     );
     expect(findings[0]!.confidence).toBe(1);
+  });
+
+  it("splits a long claim list into request-sized batches", () => {
+    // A live draft produced 98 claims; the model answered 33 and retrying sent the same
+    // oversized request again. Batching bounds each response (CR-0003).
+    const many = Array.from({ length: 45 }, (_unused, index) => ({
+      ...claims[0]!,
+      id: `claim-${index}`,
+    }));
+    const batches = batchClaims(many);
+
+    expect(batches).toHaveLength(3);
+    expect(batches.every((batch) => batch.length <= MAX_CLAIMS_PER_CRITIQUE)).toBe(true);
+    // Order and completeness are preserved, or coverage checking would be meaningless.
+    expect(batches.flat().map(({ id }) => id)).toEqual(many.map(({ id }) => id));
+  });
+
+  it("issues one batch when the draft is short", () => {
+    expect(batchClaims(claims)).toHaveLength(1);
   });
 
   it("rejects a response that is not JSON", () => {

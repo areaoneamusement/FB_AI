@@ -57,6 +57,29 @@ export const GEMINI_PROVIDER = "google";
  * `npm run doctor` calls this model and prints whatever Google answers.
  */
 export const DEFAULT_MODEL_B = "gemini-3.1-flash-lite";
+
+/**
+ * Claims judged per request.
+ *
+ * A live draft produced 98 claims; the model answered 33 and the rest were reported as
+ * missing coverage, which retrying could not fix because the request never got smaller.
+ * Small enough that a response stays well inside any output limit, large enough that a
+ * normal draft costs only a few calls.
+ */
+export const MAX_CLAIMS_PER_CRITIQUE = 20;
+
+/** Splits claims into request-sized batches, preserving order. */
+export function batchClaims(
+  claims: readonly Claim[],
+  size: number = MAX_CLAIMS_PER_CRITIQUE,
+): readonly (readonly Claim[])[] {
+  if (claims.length === 0) return [[]];
+  const batches: Claim[][] = [];
+  for (let index = 0; index < claims.length; index += size) {
+    batches.push(claims.slice(index, index + size));
+  }
+  return batches;
+}
 export const CRITIQUE_PROMPT_VERSION = "model-b-critique-v1";
 export const MODEL_B_CONFIGURATION_VERSION = "model-b-config-v1";
 
@@ -132,34 +155,43 @@ export class GeminiModelBClient implements ModelBCritiquePort {
   ): Promise<ModelBCritiqueResponse> {
     const signal = withDeadline(control);
     const evidenceIndex = buildEvidenceIndex(request.research);
+    const findings: VerificationFinding[] = [];
 
-    const prompt = [
-      renderNumberedResearch(request.research),
-      "",
-      `Vòng kiểm chứng ${request.round}. Các claim cần xét:`,
-      ...request.claims.map((claim) => `- ${claim.id}: ${claim.text}`),
-      "",
-      "Trả về đúng một phán quyết cho mỗi claim ở trên.",
-    ].join("\n");
+    // One response has to carry one object per claim, and claim count grows with draft
+    // length. A live draft produced 98 claims and the model answered 33 of them; retrying
+    // sent the same oversized request again. Batching bounds each response without
+    // weakening coverage — every batch is still checked claim by claim (CR-0003).
+    for (const batch of batchClaims(request.claims)) {
+      const prompt = [
+        renderNumberedResearch(request.research),
+        "",
+        `Vòng kiểm chứng ${request.round}. Các claim cần xét:`,
+        ...batch.map((claim) => `- ${claim.id}: ${claim.text}`),
+        "",
+        "Trả về đúng một phán quyết cho mỗi claim ở trên.",
+      ].join("\n");
 
-    const response = await this.client.models.generateContent({
-      model: this.model,
-      contents: prompt,
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseJsonSchema: FINDINGS_SCHEMA,
-        abortSignal: signal,
-      },
-    });
+      const response = await this.client.models.generateContent({
+        model: this.model,
+        contents: prompt,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json",
+          responseJsonSchema: FINDINGS_SCHEMA,
+          abortSignal: signal,
+        },
+      });
 
-    const text = response.text;
-    if (text === undefined || text.trim().length === 0) {
-      throw new ModelResponseError("Model B trả về nội dung rỗng");
+      const text = response.text;
+      if (text === undefined || text.trim().length === 0) {
+        throw new ModelResponseError("Model B trả về nội dung rỗng");
+      }
+
+      findings.push(...parseFindings(text, batch, evidenceIndex));
     }
 
     return {
-      findings: parseFindings(text, request.claims, evidenceIndex),
+      findings,
       provenance: this.provenance(request.requestedModel),
     };
   }

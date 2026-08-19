@@ -123,6 +123,15 @@ const SYSTEM_PROMPT = [
   "",
   "Viết cho người đọc phổ thông: câu ngắn, không thuật ngữ khi có từ thường dùng thay được,",
   "không phóng đại, không hứa hẹn kết quả. Bài Facebook mở đầu bằng thông tin đáng chú ý nhất.",
+  "",
+  // Every sentence is checked against the research. A live draft was blocked on
+  // "this is editorial advice" — a correct verdict on a sentence that should not have been
+  // written, since nothing in the research could ever support it (CR-0003).
+  "Đừng viết lời khuyên, lời kêu gọi hành động hay hướng dẫn mà research không nói tới",
+  "(ví dụ: bảo người đọc vào đọc repo, thử cài đặt, hay đánh giá là nên dùng). Mỗi câu bạn",
+  "viết đều bị đối chiếu với research; câu nào không có gì chống lưng sẽ chặn cả bài.",
+  "",
+  "Không thêm hashtag.",
 ].join("\n");
 
 export class AnthropicModelAClient implements ModelAGenerationPort, ModelACorrectionPort {
