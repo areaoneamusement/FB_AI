@@ -162,6 +162,13 @@ export class HttpSourceFetcher implements SourceFetcher {
   private readonly pageSize: number;
   private readonly maxPagesPerCycle: number;
   private readonly robotsCache = new Map<string, Promise<RobotsSnapshot>>();
+  /**
+   * Requests made per source, for the cycle report.
+   *
+   * Four live runs were spent arguing about how many requests a cycle costs against a
+   * rate limit that kept saying it was already spent. Counting is cheaper than estimating.
+   */
+  private readonly requests = new Map<string, number>();
 
   constructor(private readonly options: HttpSourceFetcherOptions = {}) {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
@@ -300,6 +307,7 @@ export class HttpSourceFetcher implements SourceFetcher {
     if (exhausted) {
       return {
         items,
+        exhausted: true,
         // Reset to page 1 and remember the high-water mark for the next run.
         ...(newest === undefined
           ? {}
@@ -388,11 +396,21 @@ export class HttpSourceFetcher implements SourceFetcher {
 
   // ------------------------------------------------------------------ HTTP
 
+  /** Requests made per source since the last `resetRequestCounts`. */
+  public requestCounts(): ReadonlyMap<string, number> {
+    return new Map(this.requests);
+  }
+
+  public resetRequestCounts(): void {
+    this.requests.clear();
+  }
+
   private async request(
     source: SourceConfig,
     url: URL,
     init: { headers: Record<string, string>; signal: AbortSignal },
   ): Promise<Response> {
+    this.requests.set(source.id, (this.requests.get(source.id) ?? 0) + 1);
     const timeout = AbortSignal.timeout(this.timeoutMs);
     const signal = AbortSignal.any([init.signal, timeout]);
     try {

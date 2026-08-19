@@ -60,6 +60,7 @@ describe("summarize", () => {
       pendingRunIds: [],
       skippedReasons: [],
       errorReasons: [],
+      requestsBySource: {},
     });
   });
 });
@@ -74,6 +75,7 @@ describe("formatReport", () => {
       pendingRunIds: ["run-1"],
       skippedReasons: [],
       errorReasons: [],
+      requestsBySource: {},
     });
     expect(text).toContain("Thu thập: 2 mục");
     expect(text).toContain("chờ duyệt: 1");
@@ -93,9 +95,41 @@ describe("formatReport", () => {
       errorReasons: [
         { sourceId: "github-llm", reason: "GitHub search failed with 403", attempts: 3 },
       ],
+      requestsBySource: {},
     });
     expect(text).toContain("bỏ qua blog: Blocked by robots.txt");
     expect(text).toContain("LỖI github-llm (đã thử 3 lần): GitHub search failed with 403");
+  });
+
+  it("prints how many requests each source cost", () => {
+    // Rate limits are the main way a cycle fails. Four live runs were spent arguing about
+    // the budget because nothing measured it.
+    const text = formatReport({
+      collected: 4,
+      skipped: 0,
+      errors: 0,
+      outcomes: {},
+      pendingRunIds: [],
+      skippedReasons: [],
+      errorReasons: [],
+      requestsBySource: { "github-llm": 14, "google-ai-blog": 2 },
+    });
+    expect(text).toContain("Request đã dùng: 16");
+    expect(text).toContain("github-llm 14");
+  });
+
+  it("says nothing about requests when none were counted", () => {
+    const text = formatReport({
+      collected: 0,
+      skipped: 0,
+      errors: 0,
+      outcomes: {},
+      pendingRunIds: [],
+      skippedReasons: [],
+      errorReasons: [],
+      requestsBySource: {},
+    });
+    expect(text).not.toContain("Request đã dùng");
   });
 
   it("says plainly when nothing reached review", () => {
@@ -107,6 +141,7 @@ describe("formatReport", () => {
       pendingRunIds: [],
       skippedReasons: [],
       errorReasons: [],
+      requestsBySource: {},
     });
     expect(text).toContain("Không có bài nào tới bước duyệt");
   });

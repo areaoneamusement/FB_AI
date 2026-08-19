@@ -165,6 +165,7 @@ export class SourceCollector {
       }
 
       await this.state.saveCursor(page.nextCursor);
+      if (page.exhausted === true) return;
       cursor = page.nextCursor;
     }
   }

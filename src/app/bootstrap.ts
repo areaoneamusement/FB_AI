@@ -32,6 +32,8 @@ export interface ServerEnvironment {
 }
 
 export interface BootstrappedApplication {
+  /** Exposed so a cycle can report what it actually spent against each source's limits. */
+  readonly sourceFetcher: HttpSourceFetcher;
   readonly app: MvpApplication;
   readonly host: string;
   readonly port: number;
@@ -103,6 +105,7 @@ export async function bootstrap(env: ServerEnvironment): Promise<BootstrappedApp
 
   return {
     app,
+    sourceFetcher,
     host: optionalEnv(env, "FB_AI_HOST") ?? DEFAULTS.host,
     port: parsePort(optionalEnv(env, "FB_AI_PORT")),
     sqlitePath,

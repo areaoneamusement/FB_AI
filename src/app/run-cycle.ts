@@ -19,6 +19,11 @@ export interface CycleReport {
   /** Why each source was skipped or failed — without these a zero-item cycle is unactionable. */
   readonly skippedReasons: readonly SourceProblem[];
   readonly errorReasons: readonly SourceProblem[];
+  /**
+   * HTTP requests actually made per source. Rate limits are the main way a cycle fails,
+   * and until this was printed the budget could only be estimated — badly.
+   */
+  readonly requestsBySource: Readonly<Record<string, number>>;
 }
 
 export interface SourceProblem {
@@ -28,15 +33,20 @@ export interface SourceProblem {
 }
 
 export async function runCycle(env: ServerEnvironment = process.env): Promise<CycleReport> {
-  const { app } = await bootstrap(env);
+  const { app, sourceFetcher } = await bootstrap(env);
   try {
-    return summarize(await app.pipeline.runCycle());
+    sourceFetcher.resetRequestCounts();
+    const outcome = await app.pipeline.runCycle();
+    return summarize(outcome, sourceFetcher.requestCounts());
   } finally {
     app.close();
   }
 }
 
-export function summarize(outcome: MvpCycleOutcome): CycleReport {
+export function summarize(
+  outcome: MvpCycleOutcome,
+  requests: ReadonlyMap<string, number> = new Map(),
+): CycleReport {
   const outcomes: Record<string, number> = {};
   const pendingRunIds: string[] = [];
 
@@ -60,6 +70,7 @@ export function summarize(outcome: MvpCycleOutcome): CycleReport {
       reason: record.reason,
       attempts: record.attempts,
     })),
+    requestsBySource: Object.fromEntries(requests),
   };
 }
 
@@ -89,6 +100,12 @@ export function formatReport(report: CycleReport): string {
   for (const [kind, count] of Object.entries(report.outcomes)) {
     const label = OUTCOME_LABELS[kind as MvpItemOutcome["kind"]] ?? kind;
     lines.push(`  ${label}: ${count}`);
+  }
+  const requests = Object.entries(report.requestsBySource);
+  if (requests.length > 0) {
+    const total = requests.reduce((sum, [, count]) => sum + count, 0);
+    const detail = requests.map(([id, count]) => `${id} ${count}`).join(", ");
+    lines.push(`Request đã dùng: ${total} (${detail})`);
   }
   if (report.pendingRunIds.length > 0) {
     lines.push(`Sẵn sàng duyệt: ${report.pendingRunIds.join(", ")}`);
