@@ -142,7 +142,10 @@ function optional<K extends string, V>(key: K, value: V | undefined): Partial<Re
 export function requireEnv(env: ServerEnvironment, name: string): string {
   const value = env[name];
   if (value === undefined || value.trim().length === 0) {
-    throw new ConfigError(`Thiếu biến môi trường bắt buộc: ${name}`);
+    throw new ConfigError(
+      `Thiếu biến môi trường bắt buộc: ${name}. ` +
+        "Kiểm tra file .env ở thư mục gốc (copy từ .env.example rồi điền).",
+    );
   }
   return value;
 }

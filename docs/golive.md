@@ -126,7 +126,7 @@ với hash cụ thể — nội dung bạn copy đúng là nội dung bạn đã
 
 | Thông báo | Nguyên nhân thường gặp |
 | --- | --- |
-| `Thiếu biến môi trường bắt buộc: X` | Chưa nạp `.env`. Dùng `node --env-file=.env` hoặc export tay |
+| `Thiếu biến môi trường bắt buộc: X` | Thiếu dòng đó trong `.env`, hoặc đang chạy ở thư mục khác. `npm start` và `npm run cycle` tự nạp `.env` ở thư mục gốc |
 | `Operator token phải dài ít nhất 16 ký tự` | Token quá ngắn |
 | `GitHub search failed with 403 rate limit exceeded` | Hết quota giờ. Đặt `GITHUB_TOKEN` |
 | `GitHub search failed with 403 Forbidden` | Giới hạn phụ (secondary rate limit) do bắn quá nhanh. Đợi 10–60 phút, đừng chạy lại liên tục |

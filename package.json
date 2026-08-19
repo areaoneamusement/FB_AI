@@ -9,8 +9,8 @@
   "scripts": {
     "build": "vite build",
     "dev:dashboard": "vite",
-    "start": "tsx src/app/server.ts",
-    "cycle": "tsx src/app/run-cycle.ts",
+    "start": "tsx --env-file-if-exists=.env src/app/server.ts",
+    "cycle": "tsx --env-file-if-exists=.env src/app/run-cycle.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:vitest && npm run test:node",
     "test:vitest": "vitest run",
