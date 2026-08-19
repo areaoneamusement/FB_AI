@@ -39,7 +39,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 GEMINI_API_KEY=...
 ```
 
-> `GEMINI_MODEL` mặc định là `gemini-3.1-pro-preview`. Nếu key của bạn không truy cập được model đó,
+> `GEMINI_MODEL` mặc định là `gemini-3.1-flash-lite`. Nếu key của bạn không truy cập được model đó,
 > đặt lại bằng tên model bạn thực sự có. Tên sai **không** báo lỗi lúc khởi động — nó chỉ hiện
 > ra ở bước kiểm chứng, dưới dạng `kiểm chứng chặn (có thể thử lại)`, sau khi đã tốn tiền gọi
 > Claude viết bài. Chạy `npm run doctor` trước để biết chắc.

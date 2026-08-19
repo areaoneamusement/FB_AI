@@ -22,6 +22,7 @@ import type {
   ResearchResult,
   Topic,
 } from "../src/domain/content.js";
+import { rankCandidates } from "../src/app/gemini-model-search.js";
 import type { SourceReference } from "../src/domain/source.js";
 
 const NOW = new Date("2026-08-17T00:00:00.000Z");
@@ -402,11 +403,25 @@ describe("GeminiModelBClient", () => {
 });
 
 describe("DEFAULT_MODEL_B", () => {
-  it("is not a model Google has stopped serving to new accounts", () => {
-    // Live failure: `404 ... models/gemini-2.5-pro is no longer available to new users`.
-    // Every cycle blocked on it, three attempts at a time, and reported only as a
-    // retryable verification failure — the default is worth pinning.
+  it("is not one of the names that already failed against a live key", () => {
+    // `gemini-2.5-pro` answered 404 (retired for new accounts); the replacement Google
+    // named in that message answered 429 `limit: 0` (free tier not entitled). Both blocked
+    // every cycle, three attempts at a time.
     expect(DEFAULT_MODEL_B).not.toBe("gemini-2.5-pro");
+    expect(DEFAULT_MODEL_B).not.toBe("gemini-3.1-pro-preview");
     expect(DEFAULT_MODEL_B).not.toHaveLength(0);
+  });
+
+  it("is what the doctor's own ranking would pick first", () => {
+    // The second bad default was a pro-tier preview — the two properties rankCandidates
+    // pushes to the back. Holding the default to that ordering stops the shipped choice
+    // and the recovery logic from contradicting each other again.
+    const ranked = rankCandidates([
+      { name: "gemini-3.1-pro" },
+      { name: "gemini-3.1-pro-preview" },
+      { name: "gemini-2.5-flash" },
+      { name: DEFAULT_MODEL_B },
+    ]);
+    expect(ranked[0]?.name).toBe(DEFAULT_MODEL_B);
   });
 });

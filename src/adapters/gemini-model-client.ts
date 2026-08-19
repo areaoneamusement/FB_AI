@@ -43,15 +43,20 @@ export const GEMINI_PROVIDER = "google";
 /**
  * Model B default.
  *
- * `gemini-2.5-pro` was the default until Google stopped serving it to new accounts:
- * `404 ... no longer available to new users. Please update your code to use
- * models/gemini-3.1-pro-preview`. Every cycle blocked on that, three attempts at a
- * time, reported only as a retryable verification failure.
+ * Two defaults have already failed on the same live key. `gemini-2.5-pro` answered
+ * `404 no longer available to new users`; the replacement Google named in that message,
+ * `gemini-3.1-pro-preview`, answered `429 ... limit: 0` — a free key is not entitled to a
+ * pro tier at all. Both blocked every cycle three attempts at a time, reported only as a
+ * retryable verification failure.
+ *
+ * A flash-lite tier is what a free key can actually use, confirmed against a real one, and
+ * a stable name outlives a preview. `rankCandidates` orders candidates by those same two
+ * properties, and a test holds this default to that ordering so the two cannot disagree.
  *
  * Override with `GEMINI_MODEL` when an account has access to something else;
  * `npm run doctor` calls this model and prints whatever Google answers.
  */
-export const DEFAULT_MODEL_B = "gemini-3.1-pro-preview";
+export const DEFAULT_MODEL_B = "gemini-3.1-flash-lite";
 export const CRITIQUE_PROMPT_VERSION = "model-b-critique-v1";
 export const MODEL_B_CONFIGURATION_VERSION = "model-b-config-v1";
 
